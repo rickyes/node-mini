@@ -1,2 +1,2 @@
 # node-mini
-Mini Node.js runtime built on V8
+Mini Node.js runtime built on JerryScript
