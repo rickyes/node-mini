@@ -1,2 +1,5 @@
 # node-mini
-Mini Node.js runtime built on V8
+
+``` bash
+$ g++ -I ./deps/v8/include ./src/helloworld.cpp -o ./out/helloworld -lv8 -lv8_libbase -lv8_libplatform -std=c++11
+```

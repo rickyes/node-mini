@@ -1,0 +1,2 @@
+#!/bin/bash
+exec "/usr/local/Cellar/v8/6.9.427.22/libexec/d8" --icu-data-file="/usr/local/Cellar/v8/6.9.427.22/libexec/icudtl.dat" "$@"
