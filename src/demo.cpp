@@ -45,5 +45,9 @@ int main(int argc, char* argv[]) {
         }
     }
   }
+  isolate->Dispose();
+  V8::Dispose();
+  V8::ShutdownPlatform();
+  delete create_params.array_buffer_allocator;
   return 0;
 }
