@@ -8,5 +8,5 @@
 
 class shell {
     public:
-        static int init(int argc, char* argv[]);
+       static int init(int argc, char* argv[]);
 };

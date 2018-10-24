@@ -56,11 +56,7 @@ static bool run_shell;
 
 
 int shell::init(int argc, char* argv[]) {
-  v8::V8::InitializeICUDefaultLocation(argv[0]);
-  v8::V8::InitializeExternalStartupData(argv[0]);
   std::unique_ptr<v8::Platform> platform = v8::platform::NewDefaultPlatform();
-  v8::V8::InitializePlatform(platform.get());
-  v8::V8::Initialize();
   v8::V8::SetFlagsFromCommandLine(&argc, argv, true);
   v8::Isolate::CreateParams create_params;
   create_params.array_buffer_allocator =
@@ -300,7 +296,7 @@ int RunMain(v8::Isolate* isolate, v8::Platform* platform, int argc,
 
 // The read-eval-execute loop of the shell.
 void RunShell(v8::Local<v8::Context> context, v8::Platform* platform) {
-  fprintf(stderr, "V8 version %s [sample shell]\n", v8::V8::GetVersion());
+  fprintf(stderr, "V8 version %s [node-mini shell]\n", v8::V8::GetVersion());
   static const int kBufferSize = 256;
   // Enter the execution environment before evaluating any code.
   v8::Context::Scope context_scope(context);
