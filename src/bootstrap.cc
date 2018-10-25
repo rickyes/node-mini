@@ -6,6 +6,7 @@
 #include <sstream> 
 #include <map>
 #include "shell.h"
+#include "process.h"
 
 using v8::V8;
 using std::map;
@@ -57,26 +58,11 @@ MaybeLocal<String> ReadFile(Isolate* isolate, const string& name) {
     return result;
 }
 
-void compile(string source, Isolate* isolate) {
-    v8::Local<v8::Context> context = v8::Context::New(isolate);
-    v8::Context::Scope context_scope(context);
-    v8::Local<v8::String> contents = v8::String::NewFromUtf8(isolate, source.c_str(), v8::NewStringType::kNormal)
-        .ToLocalChecked();
-    v8::Local<v8::Script> script = 
-        v8::Script::Compile(context, contents).ToLocalChecked();
-    v8::Local<v8::Value> result = script -> Run(context).ToLocalChecked();
-
-    uint32_t number = result->Uint32Value(context).ToChecked();
-    printf("3 + 4 = %u\n", number);
-}
-
 void compile(Local<String> source, Isolate* isolate) {
     Local<v8::Context> context = v8::Context::New(isolate);
     v8::Context::Scope context_scope(context);
     Local<v8::Script> script = v8::Script::Compile(context, source).ToLocalChecked();
-    Local<Value> result = script->Run(context).ToLocalChecked();
-    uint32_t number = result->Uint32Value(context).ToChecked();
-    printf("3 + 4 = %u\n", number);
+    script->Run(context).ToLocalChecked();
 }
 
 void ParseOptions(int argc,
