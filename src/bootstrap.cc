@@ -17,6 +17,14 @@ using v8::Isolate;
 using v8::NewStringType;
 using v8::Local;
 using v8::Value;
+using v8::ObjectTemplate;
+using v8::Handle;
+using v8::FunctionTemplate;
+using v8::Context;
+using v8::Script;
+using v8::TryCatch;
+using v8::HandleScope;
+using v8::Message;
 
 void init_v8(const char* argv[]) {
     V8::InitializeICUDefaultLocation(argv[0]);
@@ -58,12 +66,67 @@ MaybeLocal<String> ReadFile(Isolate* isolate, const string& name) {
     return result;
 }
 
-void compile(Local<String> source, Isolate* isolate) {
-    Local<v8::Context> context = v8::Context::New(isolate);
-    v8::Context::Scope context_scope(context);
-    Local<v8::Script> script = v8::Script::Compile(context, source).ToLocalChecked();
-    script->Run(context).ToLocalChecked();
+
+void parseException(Isolate* isolate, TryCatch* try_catch) {
+  HandleScope handle_scope(isolate);
+  String::Utf8Value exception(isolate, try_catch->Exception());
+  const char* exception_string = process::ToCString(exception);
+  Local<Message> message = try_catch->Message();
+  if (message.IsEmpty()) {
+    // V8 didn't provide any extra information about this error; just
+    // print the exception.
+    fprintf(stderr, "%s\n", exception_string);
+  } else {
+    // Print (filename):(line number): (message).
+    String::Utf8Value filename(isolate,
+                                   message->GetScriptOrigin().ResourceName());
+    Local<v8::Context> context(isolate->GetCurrentContext());
+    const char* filename_string = process::ToCString(filename);
+    int linenum = message->GetLineNumber(context).FromJust();
+    fprintf(stderr, "%s:%i: %s\n", filename_string, linenum, exception_string);
+    // Print line of source code.
+    String::Utf8Value sourceline(
+        isolate, message->GetSourceLine(context).ToLocalChecked());
+    const char* sourceline_string = process::ToCString(sourceline);
+    fprintf(stderr, "%s\n", sourceline_string);
+    // Print wavy underline (GetUnderline is deprecated).
+    int start = message->GetStartColumn(context).FromJust();
+    for (int i = 0; i < start; i++) {
+      fprintf(stderr, " ");
+    }
+    int end = message->GetEndColumn(context).FromJust();
+    for (int i = start; i < end; i++) {
+      fprintf(stderr, "^");
+    }
+    fprintf(stderr, "\n");
+    Local<v8::Value> stack_trace_string;
+    if (try_catch->StackTrace(context).ToLocal(&stack_trace_string) &&
+        stack_trace_string->IsString() &&
+        Local<v8::String>::Cast(stack_trace_string)->Length() > 0) {
+      String::Utf8Value stack_trace(isolate, stack_trace_string);
+      const char* stack_trace_string = process::ToCString(stack_trace);
+      fprintf(stderr, "%s\n", stack_trace_string);
+    }
+  }
 }
+
+void compile(Local<String> source, Isolate* isolate, Local<v8::Context> context) {
+    TryCatch try_catch(isolate);
+    Local<Script> script;
+    v8::ScriptOrigin origin(String::NewFromUtf8(isolate, "(xnode)"));
+    if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
+      parseException(isolate, &try_catch);
+      return;
+    }
+    Local<Value> result;
+    if (!script->Run(context).ToLocal(&result)) {
+        assert(try_catch.HasCaught());
+        parseException(isolate, &try_catch);
+        return;
+    }
+}
+
+
 
 void ParseOptions(int argc,
                   char* argv[],
@@ -96,12 +159,26 @@ int main(int argc, char *argv[]) {
     v8::HandleScope handle_scope(isolate);
 
     if (argc > 1) {
+        Handle<ObjectTemplate> global = ObjectTemplate::New(isolate);
+        global->Set(String::NewFromUtf8(isolate, "global"), ObjectTemplate::New(isolate));
+        global->Set(String::NewFromUtf8(isolate, "print"), FunctionTemplate::New(isolate, process::print));
+        global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate, process::print_error));
+        Local<Context> context = Context::New(isolate, NULL, global);
+        Context::Scope context_scope(context);
+        const char* bootstrapJsCore = "lib/console.js";
+        Local<String> sourceJsCode;
+        if (!ReadFile(isolate, bootstrapJsCore).ToLocal(&sourceJsCode)) {
+          fprintf(stderr, "The startup script was not found.\n");
+        }
+        compile(sourceJsCode, isolate, context);
+
         const char* filename = argv[1];
         Local<String> source;
         if (!ReadFile(isolate, filename).ToLocal(&source)) {
            fprintf(stderr, "No script was specified.\n");
         }
-        compile(source, isolate);
+
+        compile(source, isolate, context);
     } else {
         return shell::init(argc, argv);
     }
