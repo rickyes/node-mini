@@ -1,0 +1,9 @@
+language: cpp
+compiler: g++
+
+os:
+- osx
+
+script:
+- make
+- ./xmake test/hello.js

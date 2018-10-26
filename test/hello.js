@@ -7,3 +7,4 @@ let bytes = new Uint8Array([
 let module = new WebAssembly.Module(bytes);
 let instance = new WebAssembly.Instance(module);
 instance.exports.add(3, 4);
+console.log("success");
