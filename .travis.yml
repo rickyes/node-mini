@@ -4,6 +4,9 @@ compiler: g++
 os:
 - osx
 
+before_script:
+- brew install v8
+
 script:
 - make
 - ./xmake test/hello.js
