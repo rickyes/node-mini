@@ -1,71 +1,40 @@
-# depot_tools
+V8 JavaScript Engine
+=============
 
-Tools for working with Chromium development. It requires python 2.7.
+V8 is Google's open source JavaScript engine.
 
+V8 implements ECMAScript as specified in ECMA-262.
 
-## Tools
+V8 is written in C++ and is used in Google Chrome, the open source
+browser from Google.
 
-The most important tools are:
+V8 can run standalone, or can be embedded into any C++ application.
 
-- `fetch`: A `gclient` wrapper to checkout a project. Use `fetch --help` for
-  more details.
-- `gclient`: A meta-checkout tool. Think
-  [repo](https://source.android.com/source/using-repo.html) or [git
-  submodules](https://git-scm.com/docs/git-submodule), except that it support
-  OS-specific rules, e.g. do not checkout Windows only dependencies when
-  checking out for Android. Use `gclient help` for more details and
-  [README.gclient.md](README.gclient.md).
-- `git cl`: A code review tool to interact with Rietveld or Gerrit. Use `git cl
-  help` for more details and [README.git-cl.md](README.git-cl.md).
-- `roll-dep`: A gclient dependency management tool to submit a _dep roll_,
-  updating a dependency to a newer revision.
-
-There are a lot of git utilities included.
+V8 Project page: https://github.com/v8/v8/wiki
 
 
-## Updating
+Getting the Code
+=============
 
-`depot_tools` updates itself automatically when running `gclient` tool. To
-disable auto update, set the environment variable `DEPOT_TOOLS_UPDATE=0`.
+Checkout [depot tools](http://www.chromium.org/developers/how-tos/install-depot-tools), and run
 
-To update package manually, run `update_depot_tools.bat` on Windows,
-or `./update_depot_tools` on Linux or Mac.
+        fetch v8
 
-On Windows only, running `gclient` will install `git` and `python`.
+This will checkout V8 into the directory `v8` and fetch all of its dependencies.
+To stay up to date, run
+
+        git pull origin
+        gclient sync
+
+For fetching all branches, add the following into your remote
+configuration in `.git/config`:
+
+        fetch = +refs/branch-heads/*:refs/remotes/branch-heads/*
+        fetch = +refs/tags/*:refs/tags/*
 
 
-## Contributing
+Contributing
+=============
 
-To contribute change for review:
-
-    git new-branch <somename>
-    # Hack
-    git add .
-    git commit -a -m "Fixes goat teleporting"
-    # find reviewers
-    git cl owners
-    git log -- <yourfiles>
-
-    # Request a review.
-    git cl upload -r reviewer1@chromium.org,reviewer2@chromium.org --send-mail
-
-    # Edit change description if needed.
-    git cl desc
-
-    # If change is approved, flag it to be committed.
-    git cl set-commit
-
-    # If change needs more work.
-    git rebase-update
-    ...
-    git cl upload -t "Fixes goat teleporter destination to be Australia"
-
-See also [open bugs](https://bugs.chromium.org/p/chromium/issues/list?can=2&q=component%3AInfra%3ESDK),
-[open reviews](https://chromium-review.googlesource.com/q/status:open+project:chromium%252Ftools%252Fdepot_tools),
-[forum](https://groups.google.com/a/chromium.org/forum/#!forum/infra-dev) or
-[report problems](https://bugs.chromium.org/p/chromium/issues/entry?components=Infra%3ESDK).
-
-### cpplint.py
-
-To update cpplint.py, please submit the change upstream first at
-https://github.com/google/styleguide/tree/gh-pages/cpplint then copy it down.
+Please follow the instructions mentioned on the
+[V8 wiki](https://github.com/v8/v8/wiki/Contributing).
