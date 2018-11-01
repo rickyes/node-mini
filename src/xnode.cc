@@ -7,6 +7,8 @@
 #include <map>
 #include "shell.h"
 #include "process.h"
+#include "env.h"
+#include <assert.h>
 
 using v8::V8;
 using std::map;
@@ -25,6 +27,13 @@ using v8::Script;
 using v8::TryCatch;
 using v8::HandleScope;
 using v8::Message;
+using v8::Object;
+using v8::Function;
+using v8::FunctionCallbackInfo;
+using v8::EscapableHandleScope;
+using v8::ScriptOrigin;
+
+#define CHECK(pass) do { assert(pass); } while (0) 
 
 void init_v8(const char* argv[]) {
     V8::InitializeICUDefaultLocation(argv[0]);
@@ -145,6 +154,84 @@ void ParseOptions(int argc,
     }
 }
 
+static void GetBinding(const FunctionCallbackInfo<Value>& args) {
+    Isolate* isolate = Environment::getCurrent(args);
+
+    CHECK(args[0]->IsString());
+
+    Local<String> module = args[0].As<String>();
+    String::Utf8Value module_v(isolate, module);
+
+    Local<Object> exports;
+    if (!strcmp(*module_v, "natives")) {
+        exports = Object::New(isolate);
+    }
+
+    args.GetReturnValue().Set(exports);
+}
+
+static MaybeLocal<Value> ExecuteString(
+    Isolate* isolate,
+    Local<Context> context,
+    Local<String> source,
+    Local<String> filename) {
+    EscapableHandleScope scope(isolate);
+    TryCatch try_catch(isolate);
+
+    try_catch.SetVerbose(false);
+
+    ScriptOrigin origin(filename);
+    MaybeLocal<Script> script = 
+        v8::Script::Compile(context, source, &origin);
+    if (script.IsEmpty()) {
+        parseException(isolate, &try_catch);
+        return MaybeLocal<Value>();
+    }
+
+    MaybeLocal<Value> result = script.ToLocalChecked()->Run(context);
+    if (result.IsEmpty()) {
+        if (try_catch.HasTerminated()) {
+            isolate->CancelTerminateExecution();
+            return MaybeLocal<Value>();
+        }
+        parseException(isolate, &try_catch);
+        return MaybeLocal<Value>();
+    }
+
+    return scope.Escape(result.ToLocalChecked());
+}
+
+static MaybeLocal<Function> GetBootstrapper(
+    Isolate* isolate,
+    Local<Context> context,
+    Local<String> source,
+    Local<String> script_name) {
+  EscapableHandleScope scope(isolate);
+
+  TryCatch try_catch(isolate);
+
+  try_catch.SetVerbose(false);
+
+  MaybeLocal<Value> bootstrapper_v = ExecuteString(isolate, context, source, script_name);
+  if (bootstrapper_v.IsEmpty()) {
+      return MaybeLocal<Function>();
+  }
+
+  if (try_catch.HasCaught()) {
+      parseException(isolate, &try_catch);
+      exit(10);
+  }
+
+  CHECK(bootstrapper_v.ToLocalChecked()->IsFunction());
+  return scope.Escape(bootstrapper_v.ToLocalChecked().As<Function>());
+}
+
+static bool ExecuteBootstrapper(Isolate* isolate, Local<Context> context, Local<Function> bootstrapper,
+                                    int argc, Local<Value> argv[], Local<Value>* out) {
+    bool ret = bootstrapper->Call(context, Null(isolate), argc, argv).ToLocal(out);
+    return ret;
+}
+
 int main(int argc, char *argv[]) {
     V8::InitializeICUDefaultLocation(argv[0]);
     V8::InitializeExternalStartupData(argv[0]);
@@ -159,18 +246,44 @@ int main(int argc, char *argv[]) {
     v8::HandleScope handle_scope(isolate);
 
     if (argc > 1) {
+        HandleScope handle_scope(isolate);
+
         Handle<ObjectTemplate> global = ObjectTemplate::New(isolate);
-        global->Set(String::NewFromUtf8(isolate, "global"), ObjectTemplate::New(isolate));
         global->Set(String::NewFromUtf8(isolate, "print"), FunctionTemplate::New(isolate, process::print));
         global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate, process::print_error));
         Local<Context> context = Context::New(isolate, NULL, global);
         Context::Scope context_scope(context);
+
         const char* bootstrapJsCore = "lib/console.js";
         Local<String> sourceJsCode;
         if (!ReadFile(isolate, bootstrapJsCore).ToLocal(&sourceJsCode)) {
-          fprintf(stderr, "The startup script was not found.\n");
+            fprintf(stderr, "The startup script was not found.\n");
         }
         compile(sourceJsCode, isolate, context);
+
+        Local<String> loaders_source;
+        const char* loaders_name = "lib/bootstrap/loaders.js";
+        if (!ReadFile(isolate, loaders_name).ToLocal(&loaders_source)) {
+            fprintf(stderr, "The startup script was not found.\n");
+        }
+
+        MaybeLocal<Function> loaders_bootstrapper = 
+            GetBootstrapper(isolate, context, loaders_source, String::NewFromUtf8(isolate, loaders_name));
+        if (loaders_bootstrapper.IsEmpty()) {
+            // Execution was interrupted.
+            return 0;
+        }
+
+        Local<Function> get_binding_fn = Function::New(isolate, GetBinding);
+        Local<Value> loaders_bootstrapper_args[] = {
+            Object::New(isolate),
+            get_binding_fn
+        };
+        Local<Value> bootstrapped_loaders;
+        if (!ExecuteBootstrapper(isolate, context, loaders_bootstrapper.ToLocalChecked(),
+                                2, loaders_bootstrapper_args, &bootstrapped_loaders)) {
+            return 0;
+        }
 
         const char* filename = argv[1];
         Local<String> source;
