@@ -1,11 +1,21 @@
 #ifndef __XNODE_H__
 #define __XNODE_H__
+#define NODE_EXTERN
 
 #include "v8.h"
 
 #define CHECK(pass) do { assert(pass); } while (0)
 #define CHECK_NULL(val) CHECK((val) == nullptr)
 #define CHECK_NO_NULL(val) CHECK((val) != nullptr)
+
+#define XNODE_MODULE_VERSION 1
+
+#ifndef NODE_STRINGIFY
+#define NODE_STRINGIFY(n) NODE_STRINGIFY_HELPER(n)
+#define NODE_STRINGIFY_HELPER(n) #n
+#endif
+
+namespace xnode {
 
 typedef void (*addon_register_func)(
     v8::Local<v8::Object> exports,
@@ -30,15 +40,6 @@ struct xnode_module {
     struct xnode_module* nm_link;
 };
 
-#define XNODE_MODULE_VERSION 1
-
-#ifndef NODE_STRINGIFY
-#define NODE_STRINGIFY(n) NODE_STRINGIFY_HELPER(n)
-#define NODE_STRINGIFY_HELPER(n) #n
-#endif
-
-namespace xnode {
-
 #define NODE_SET_PROTOTYPE_METHOD NODE_SET_PROTOTYPE_METHOD
 
 inline void NODE_SET_PROTOTYPE_METHOD(v8::Local<v8::FunctionTemplate> recv,
@@ -55,7 +56,7 @@ inline void NODE_SET_PROTOTYPE_METHOD(v8::Local<v8::FunctionTemplate> recv,
     recv->PrototypeTemplate()->Set(fn_name, t);     
 }
 
-extern "C" void xnode_module_register(void* mod);
+extern "C" NODE_EXTERN void xnode_module_register(void* mod);
 
 }
 

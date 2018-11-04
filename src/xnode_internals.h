@@ -1,6 +1,5 @@
 #ifndef __INTERNALS_H__
 #define __INTERNALS_H__
-
 #include "xnode.h"
 
 enum {
@@ -10,19 +9,19 @@ enum {
 };
 
 #define XNODE_MODULE_CONTEXT_AWARE_CPP(modname, regfunc, priv, flags) \
-  static xnode_module _module = {                                     \
+  static xnode::xnode_module _module = {                              \
     XNODE_MODULE_VERSION,                                             \
     flags,                                                            \
     nullptr,                                                          \
     __FILE__,                                                         \
     nullptr,                                                          \
-    (addon_context_register_func) (regfunc),                          \
+    (xnode::addon_context_register_func) (regfunc),                   \
     NODE_STRINGIFY(modname),                                          \
     priv,                                                             \
     nullptr                                                           \
   };                                                                  \
   void _register_ ## modname() {                                      \
-      xnode::xnode_module_register(&_module);                         \
+      xnode_module_register(&_module);                                \
   }
 
 #define XNODE_BUILTIN_MODULE_CONTEXT_AWARE(modname, regfunc)          \
