@@ -9,9 +9,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+namespace xnode {
+
 class shell {
     public:
        static int init(int argc, char* argv[]);
 };
+
+} // xnode
+
 
 #endif

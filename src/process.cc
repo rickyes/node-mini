@@ -1,5 +1,7 @@
 #include "process.h"
 
+namespace xnode {
+
 const char* process::ToCString(const v8::String::Utf8Value& value) {
   return *value ? *value : "<string conversion failed>";
 }
@@ -38,3 +40,5 @@ void process::print_error(const v8::FunctionCallbackInfo<v8::Value>& args) {
   printf("\n");
   fflush(stdout);
 }
+
+} // xnode 

@@ -8,6 +8,8 @@
 #include "shell.h"
 #include "process.h"
 #include "env.h"
+#include "xnode.h"
+#include "xnode_internals.h"
 #include <assert.h>
 
 using v8::V8;
@@ -33,7 +35,13 @@ using v8::FunctionCallbackInfo;
 using v8::EscapableHandleScope;
 using v8::ScriptOrigin;
 
-#define CHECK(pass) do { assert(pass); } while (0) 
+namespace xnode {
+
+static xnode_module* modlist_builtin;
+static xnode_module* modlist_internal;
+static xnode_module* modlist_addon;
+static xnode_module* modlist_linked;
+static bool node_is_initialized;
 
 void init_v8(const char* argv[]) {
     V8::InitializeICUDefaultLocation(argv[0]);
@@ -154,15 +162,53 @@ void ParseOptions(int argc,
     }
 }
 
+inline struct xnode_module* FindModule(struct xnode_module* list,
+                                       const char* name,
+                                       int flag) {
+    struct xnode_module* mp;
+
+    for(mp = list; mp != nullptr; mp = mp->nm_link) {
+        if (strcmp(mp->nm_modname, name) == 0) break;
+    }
+    CHECK(mp == nullptr || (mp->nm_flags & flag) != 0);
+    return mp;
+}
+
+xnode_module* get_builtin_module(const char* name) {
+    return FindModule(modlist_builtin, name, NM_F_BUILTIN);
+}
+
+static Local<Object> InitModule(Isolate* isolate,
+                                Local<Context> context,
+                                xnode_module* mod,
+                                Local<String> module) {
+    Local<Object> exports = Object::New(isolate);
+    
+    CHECK_NULL(mod->nm_register);
+    CHECK_NO_NULL(mod->nm_context_register_func);
+    Local<Value> unused = v8::Undefined(isolate);
+    mod->nm_context_register_func(exports,
+                                 unused,
+                                 context,
+                                 mod->nm_priv);
+    return exports;
+}
+
 static void GetBinding(const FunctionCallbackInfo<Value>& args) {
-    Isolate* isolate = Environment::getCurrent(args);
+    Isolate* isolate = args.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
 
     CHECK(args[0]->IsString());
 
     Local<String> module = args[0].As<String>();
     String::Utf8Value module_v(isolate, module);
 
+    xnode_module* mod = get_builtin_module(*module_v);
     Local<Object> exports;
+    if (mod != nullptr) {
+        std::cout<< std::string(*module_v) <<std::endl;
+        exports = InitModule(isolate, context, mod, module);
+    }
     if (!strcmp(*module_v, "natives")) {
         exports = Object::New(isolate);
     }
@@ -232,6 +278,27 @@ static bool ExecuteBootstrapper(Isolate* isolate, Local<Context> context, Local<
     return ret;
 }
 
+extern "C" void xnode_module_register(void* m) {
+    struct xnode_module* mp = reinterpret_cast<struct xnode_module*>(m);
+
+    if (mp->nm_flags & NM_F_BUILTIN) {
+        mp->nm_link = modlist_builtin;
+        modlist_builtin = mp;
+    } else if (mp->nm_flags & NM_F_INTERNAL) {
+        mp->nm_link = modlist_internal;
+        modlist_internal = mp;
+    } else if (!node_is_initialized) {
+        mp->nm_flags = NM_F_LINKED;
+        mp->nm_link = modlist_linked;
+        modlist_linked = mp;
+    } else {
+        //
+    }
+}
+
+
+}
+
 int main(int argc, char *argv[]) {
     V8::InitializeICUDefaultLocation(argv[0]);
     V8::InitializeExternalStartupData(argv[0]);
@@ -249,51 +316,51 @@ int main(int argc, char *argv[]) {
         HandleScope handle_scope(isolate);
 
         Handle<ObjectTemplate> global = ObjectTemplate::New(isolate);
-        global->Set(String::NewFromUtf8(isolate, "print"), FunctionTemplate::New(isolate, process::print));
-        global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate, process::print_error));
+        global->Set(String::NewFromUtf8(isolate, "print"), FunctionTemplate::New(isolate, xnode::process::print));
+        global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate,xnode::process::print_error));
         Local<Context> context = Context::New(isolate, NULL, global);
         Context::Scope context_scope(context);
 
         const char* bootstrapJsCore = "lib/console.js";
         Local<String> sourceJsCode;
-        if (!ReadFile(isolate, bootstrapJsCore).ToLocal(&sourceJsCode)) {
+        if (!xnode::ReadFile(isolate, bootstrapJsCore).ToLocal(&sourceJsCode)) {
             fprintf(stderr, "The startup script was not found.\n");
         }
-        compile(sourceJsCode, isolate, context);
+        xnode::compile(sourceJsCode, isolate, context);
 
         Local<String> loaders_source;
         const char* loaders_name = "lib/bootstrap/loaders.js";
-        if (!ReadFile(isolate, loaders_name).ToLocal(&loaders_source)) {
+        if (!xnode::ReadFile(isolate, loaders_name).ToLocal(&loaders_source)) {
             fprintf(stderr, "The startup script was not found.\n");
         }
 
         MaybeLocal<Function> loaders_bootstrapper = 
-            GetBootstrapper(isolate, context, loaders_source, String::NewFromUtf8(isolate, loaders_name));
+            xnode::GetBootstrapper(isolate, context, loaders_source, String::NewFromUtf8(isolate, loaders_name));
         if (loaders_bootstrapper.IsEmpty()) {
             // Execution was interrupted.
             return 0;
         }
 
-        Local<Function> get_binding_fn = Function::New(isolate, GetBinding);
+        Local<Function> get_binding_fn = Function::New(isolate, xnode::GetBinding);
         Local<Value> loaders_bootstrapper_args[] = {
             Object::New(isolate),
             get_binding_fn
         };
         Local<Value> bootstrapped_loaders;
-        if (!ExecuteBootstrapper(isolate, context, loaders_bootstrapper.ToLocalChecked(),
+        if (!xnode::ExecuteBootstrapper(isolate, context, loaders_bootstrapper.ToLocalChecked(),
                                 2, loaders_bootstrapper_args, &bootstrapped_loaders)) {
             return 0;
         }
 
         const char* filename = argv[1];
         Local<String> source;
-        if (!ReadFile(isolate, filename).ToLocal(&source)) {
+        if (!xnode::ReadFile(isolate, filename).ToLocal(&source)) {
            fprintf(stderr, "No script was specified.\n");
         }
 
-        compile(source, isolate, context);
+        xnode::compile(source, isolate, context);
     } else {
-        return shell::init(argc, argv);
+        return xnode::shell::init(argc, argv);
     }
 
     return 0;

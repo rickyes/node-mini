@@ -16,15 +16,16 @@ enum {
     nullptr,                                                          \
     __FILE__,                                                         \
     nullptr,                                                          \
+    (addon_context_register_func) (regfunc),                          \
+    NODE_STRINGIFY(modname),                                          \
     priv,                                                             \
     nullptr                                                           \
   };                                                                  \
-  void_register_ ## modname() {                                       \
-      xnode_module_register(&_module);                                \
+  void _register_ ## modname() {                                      \
+      xnode::xnode_module_register(&_module);                         \
   }
 
 #define XNODE_BUILTIN_MODULE_CONTEXT_AWARE(modname, regfunc)          \
-  XNODE_MODULE_CONTEXT_AWARE_CPP(modname, regfunc, nullptr, NM_F_BUILTIN)
-
+    XNODE_MODULE_CONTEXT_AWARE_CPP(modname, regfunc, nullptr, NM_F_BUILTIN)
 
 #endif

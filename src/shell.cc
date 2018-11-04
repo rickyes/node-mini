@@ -36,6 +36,8 @@
  */
 
 
+namespace xnode {
+
 v8::Local<v8::Context> CreateShellContext(v8::Isolate* isolate);
 void RunShell(v8::Local<v8::Context> context, v8::Platform* platform);
 int RunMain(v8::Isolate* isolate, v8::Platform* platform, int argc,
@@ -399,4 +401,7 @@ void ReportException(v8::Isolate* isolate, v8::TryCatch* try_catch) {
       fprintf(stderr, "%s\n", stack_trace_string);
     }
   }
+}
+
+
 }

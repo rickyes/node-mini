@@ -3,11 +3,16 @@
 
 #include "v8.h"
 
+
+namespace xnode {
+
 class process {
     public:
         static void print(const v8::FunctionCallbackInfo<v8::Value>& args);
         static void print_error(const v8::FunctionCallbackInfo<v8::Value>& args);
         const static char* ToCString(const v8::String::Utf8Value& value);
 };
+
+} // xnode 
 
 #endif
