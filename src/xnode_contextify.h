@@ -2,7 +2,7 @@
 #define __XNODE_CONTEXTIZFY_H__
 
 #include "v8.h"
-
+#include "xnode_internals.h"
 
 namespace  xnode {
 namespace contextify {
@@ -12,6 +12,7 @@ class ContextScript {
         static void sayModule(const v8::FunctionCallbackInfo<v8::Value>& args);
         static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
 };
+
 }
 }
 

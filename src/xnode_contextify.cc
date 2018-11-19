@@ -1,5 +1,4 @@
 #include "xnode.h"
-#include "xnode_internals.h"
 #include "xnode_contextify.h"
 
 namespace xnode {
@@ -22,15 +21,13 @@ void ContextScript::Init(v8::Isolate* isolate, v8::Local<v8::Object> target) {
 void ContextScript::sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
     printf("hi sayModule");
 }
-
-
 void Initialize(v8::Local<v8::Object> target,
                 v8::Local<v8::Value> unused,
                 v8::Local<v8::Context> context) {
     ContextScript::Init(context->GetIsolate(), target);
 }
-}
 
+}
 }
 
 XNODE_BUILTIN_MODULE_CONTEXT_AWARE(contextify, xnode::contextify::Initialize)
