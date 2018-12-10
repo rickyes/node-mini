@@ -3,6 +3,7 @@ STD        = c++0x
 NODE       = ./xnode
 SOURCE     = ./src/*.cc
 INCLUDE    = ./deps/v8/include
+# INCLUDE_UV = ./deps/libuv/include
 V8_RELEASE = deps/v8/out.gn/x64.release.sample/obj/
 
 build:

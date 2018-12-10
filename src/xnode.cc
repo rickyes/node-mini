@@ -279,7 +279,7 @@ static bool ExecuteBootstrapper(Isolate* isolate, Local<Context> context, Local<
 }
 
 extern "C" void xnode_module_register(void* m) {
-    printf("----registry-");
+    printf("------------");
     struct xnode_module* mp = reinterpret_cast<struct xnode_module*>(m);
 
     if (mp->nm_flags & NM_F_BUILTIN) {
@@ -296,7 +296,6 @@ extern "C" void xnode_module_register(void* m) {
         //
     }
 }
-
 
 }
 

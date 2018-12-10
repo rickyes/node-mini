@@ -56,7 +56,7 @@ inline void NODE_SET_PROTOTYPE_METHOD(v8::Local<v8::FunctionTemplate> recv,
     recv->PrototypeTemplate()->Set(fn_name, t);     
 }
 
-extern "C" NODE_EXTERN void xnode_module_register(void* mod);
+extern "C" void xnode_module_register(void* mod);
 
 }
 

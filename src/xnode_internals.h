@@ -1,6 +1,7 @@
 #ifndef __INTERNALS_H__
 #define __INTERNALS_H__
 #include "xnode.h"
+#include <assert.h>
 
 enum {
   NM_F_BUILTIN  = 1 << 0,
