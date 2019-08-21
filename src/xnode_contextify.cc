@@ -27,6 +27,9 @@ void Initialize(v8::Local<v8::Object> target,
     ContextScript::Init(context->GetIsolate(), target);
 }
 
+ContextScript::ContextScript(v8::Isolate* isolate, v8::Local<v8::Object> object) {
+}
+
 }
 }
 
