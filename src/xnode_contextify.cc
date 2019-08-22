@@ -1,9 +1,14 @@
-#include "xnode.h"
+#include "v8.h"
 #include "xnode_contextify.h"
 
 namespace xnode {
 
 namespace contextify {
+
+using v8::Local;
+using v8::Context;
+using v8::Object;
+using v8::Value;
 
 void ContextScript::New(const v8::FunctionCallbackInfo<v8::Value>& args) {
     printf("hello module");
@@ -21,15 +26,12 @@ void ContextScript::Init(v8::Isolate* isolate, v8::Local<v8::Object> target) {
 void ContextScript::sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
     printf("hi sayModule");
 }
-void Initialize(v8::Local<v8::Object> target,
-                v8::Local<v8::Value> unused,
-                v8::Local<v8::Context> context) {
+void Initialize(Local<Object> target,
+                Local<Value> unused,
+                Local<Context> context,
+                void *priv) {
     ContextScript::Init(context->GetIsolate(), target);
-}
-
-ContextScript::ContextScript(v8::Isolate* isolate, v8::Local<v8::Object> object) {
-}
-
+    }
 }
 }
 

@@ -1,8 +1,10 @@
 #ifndef __XNODE_CONTEXTIZFY_H__
 #define __XNODE_CONTEXTIZFY_H__
 
+// #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
+
 #include "v8.h"
-#include "xnode_internals.h"
+#include "xnode_binding.h"
 
 namespace  xnode {
 namespace contextify {
@@ -18,4 +20,6 @@ class ContextScript {
 }
 }
 
-#endif
+#endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
+
+// #endif  // __XNODE_CONTEXTIZFY_H__

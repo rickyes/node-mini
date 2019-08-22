@@ -9,7 +9,7 @@
 #include "process.h"
 #include "env.h"
 #include "xnode.h"
-#include "xnode_internals.h"
+#include "xnode_binding.h"
 #include <assert.h>
 
 using v8::V8;
@@ -34,6 +34,8 @@ using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::EscapableHandleScope;
 using v8::ScriptOrigin;
+using std::cout;
+using std::endl;
 
 namespace xnode {
 
@@ -170,6 +172,7 @@ inline struct xnode_module* FindModule(struct xnode_module* list,
     for(mp = list; mp != nullptr; mp = mp->nm_link) {
         if (strcmp(mp->nm_modname, name) == 0) break;
     }
+    cout << (mp == nullptr) << endl;
     CHECK(mp == nullptr || (mp->nm_flags & flag) != 0);
     return mp;
 }
@@ -319,6 +322,8 @@ int main(int argc, char *argv[]) {
         global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate,xnode::process::print_error));
         Local<Context> context = Context::New(isolate, NULL, global);
         Context::Scope context_scope(context);
+
+        xnode::binding::RegisterBuiltinModules();
 
         const char* bootstrapJsCore = "lib/console.js";
         Local<String> sourceJsCode;
