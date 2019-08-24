@@ -10,7 +10,6 @@ namespace  xnode {
 namespace contextify {
 class ContextScript {
     public:
-        static void Init(v8::Isolate* isolate, v8::Local<v8::Object> target);
         static void NewInstance(const v8::FunctionCallbackInfo<v8::Value>& args);
     private:
         explicit ContextScript(v8::Isolate* isolate, v8::Local<v8::Object> object);

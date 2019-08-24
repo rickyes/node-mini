@@ -1,6 +1,7 @@
 #include "v8.h"
 #include "xnode_contextify.h"
 #include "xnode.h"
+#include "env-inl.h"
 
 namespace xnode {
 
@@ -24,12 +25,7 @@ Persistent<Function> ContextScript::constructor;
 void ContextScript::New(const FunctionCallbackInfo<Value>& args) {
 }
 
-void ContextScript::Init(Isolate* isolate, Local<Object> target) {
-    HandleScope handleScope(isolate);
-    target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
-}
-
-void ContextScript::sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
+static void sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Isolate* isolate = args.GetIsolate();
     args.GetReturnValue().Set(String::NewFromUtf8(isolate, "this is sayModule"));
 }
@@ -38,8 +34,12 @@ void Initialize(Local<Object> target,
                 Local<Value> unused,
                 Local<Context> context,
                 void *priv) {
-    ContextScript::Init(context->GetIsolate(), target);
-    }
+    Environment* env = Environment::GetCurrent(context);
+    Isolate* isolate = env->isolate();
+
+    env->SetMethod(target, "sayModule", sayModule);
+    // target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
+}
 }
 }
 
