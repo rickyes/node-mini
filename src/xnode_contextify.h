@@ -11,10 +11,13 @@ namespace contextify {
 class ContextScript {
     public:
         static void Init(v8::Isolate* isolate, v8::Local<v8::Object> target);
-        static void sayModule(const v8::FunctionCallbackInfo<v8::Value>& args);
-        static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
-        ContextScript(v8::Isolate* isolate, v8::Local<v8::Object> object);
+        static void NewInstance(const v8::FunctionCallbackInfo<v8::Value>& args);
+    private:
+        explicit ContextScript(v8::Isolate* isolate, v8::Local<v8::Object> object);
         ~ContextScript();
+        static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
+        static void sayModule(const v8::FunctionCallbackInfo<v8::Value>& args);
+        static v8::Persistent<v8::Function> constructor;
 };
 
 }

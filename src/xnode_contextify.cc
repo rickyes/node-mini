@@ -1,5 +1,6 @@
 #include "v8.h"
 #include "xnode_contextify.h"
+#include "xnode.h"
 
 namespace xnode {
 
@@ -9,23 +10,30 @@ using v8::Local;
 using v8::Context;
 using v8::Object;
 using v8::Value;
+using v8::Context;
+using v8::Persistent;
+using v8::Function;
+using v8::String;
+using v8::FunctionCallbackInfo;
+using v8::Isolate;
+using v8::FunctionTemplate;
+using v8::HandleScope;
 
-void ContextScript::New(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    printf("hello module");
+Persistent<Function> ContextScript::constructor;
+
+void ContextScript::New(const FunctionCallbackInfo<Value>& args) {
 }
 
-void ContextScript::Init(v8::Isolate* isolate, v8::Local<v8::Object> target) {
-    v8::HandleScope scope(isolate);
-    v8::Local<v8::String> class_name = v8::String::NewFromUtf8(isolate, "ContextifyScript");
-    v8::Local<v8::FunctionTemplate> script_tmpl = v8::FunctionTemplate::New(isolate);
-    script_tmpl->InstanceTemplate()->SetInternalFieldCount(1);
-    script_tmpl->SetClassName(class_name);
-    NODE_SET_PROTOTYPE_METHOD(script_tmpl, "sayModule", sayModule);
+void ContextScript::Init(Isolate* isolate, Local<Object> target) {
+    HandleScope handleScope(isolate);
+    target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
 }
 
 void ContextScript::sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    printf("hi sayModule");
+    Isolate* isolate = args.GetIsolate();
+    args.GetReturnValue().Set(String::NewFromUtf8(isolate, "this is sayModule"));
 }
+
 void Initialize(Local<Object> target,
                 Local<Value> unused,
                 Local<Context> context,

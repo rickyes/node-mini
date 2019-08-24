@@ -8,15 +8,7 @@ namespace xnode {
 #define ENVIRONMENT_STRONG_PERSISTENT_VALUES(V) \
     V(as_callback_data, v8::Object)
 
-// #define V(PropertyName, TypeName)                                             \
-//   inline v8::Local<TypeName> PropertyName() const;                            \
-//   inline void set_ ## PropertyName(v8::Local<TypeName> value);
-//   ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
-// #undef V
-
 #define V(PropertyName, TypeName) v8::Global<TypeName> PropertyName ## _;
-  ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
-#undef V
 
 class Environment {
     public:
