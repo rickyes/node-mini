@@ -13,6 +13,10 @@ namespace xnode {
   ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
 #undef V
 
+#define V(TypeName, PropertyName)                                             \
+  v8::Eternal<TypeName> PropertyName ## _;
+#undef V
+
 #define V(PropertyName, TypeName)                                             \
   inline v8::Local<TypeName> PropertyName() const;                            \
   inline void set_ ## PropertyName(v8::Local<TypeName> value);                \
