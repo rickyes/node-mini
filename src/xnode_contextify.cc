@@ -34,11 +34,10 @@ void Initialize(Local<Object> target,
                 Local<Value> unused,
                 Local<Context> context,
                 void *priv) {
-    Environment* env = Environment::GetCurrent(context);
-    Isolate* isolate = env->isolate();
 
-    env->SetMethod(target, "sayModule", sayModule);
-    // target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
+    Isolate* isolate = context->GetIsolate();
+
+    target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
 }
 }
 }

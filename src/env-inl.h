@@ -9,6 +9,10 @@
 
 namespace xnode {
 
+inline v8::Local<v8::Context> Environment::context() const {
+    return PersistentToLocal::Strong(context_);
+}
+
 inline Environment* Environment::GetFromCallbackData(v8::Local<v8::Value> val) {
     DCHECK(val->IsObject());
     v8::Local<v8::Object> obj = val.As<v8::Object>();
@@ -63,7 +67,8 @@ inline v8::Local<v8::FunctionTemplate>
                                      v8::Local<v8::Signature> signature,
                                      v8::ConstructorBehavior behavior,
                                      v8::SideEffectType side_effect_type) {
-  v8::Local<v8::Object> external = as_callback_data();
+//   v8::Local<v8::Object> external = as_callback_data();
+  v8::Local<v8::Object> external = v8::Object::New(isolate());
   return v8::FunctionTemplate::New(isolate(), callback, external,
                                    signature, 0, behavior, side_effect_type);
 }

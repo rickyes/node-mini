@@ -16,17 +16,17 @@ namespace xnode {
  }
 
  void Environment::CreateProperties() {
-  HandleScope handle_scope(isolate_);
-  Local<Context> ctx = context();
-  Local<FunctionTemplate> templ = FunctionTemplate::New(isolate());
-  templ->InstanceTemplate()->SetInternalFieldCount(1);
-  Local<Object> obj = templ->GetFunction(ctx)
-                          .ToLocalChecked()
-                          ->NewInstance(ctx)
-                          .ToLocalChecked();
-  obj->SetAlignedPointerInInternalField(0, this);
-  set_as_callback_data(obj);
-  set_as_callback_data_template(templ);
+//   HandleScope handle_scope(isolate_);
+//   Local<Context> ctx = context();
+//   Local<FunctionTemplate> templ = FunctionTemplate::New(isolate());
+//   templ->InstanceTemplate()->SetInternalFieldCount(1);
+//   Local<Object> obj = templ->GetFunction(ctx)
+//                           .ToLocalChecked()
+//                           ->NewInstance(ctx)
+//                           .ToLocalChecked();
+//   obj->SetAlignedPointerInInternalField(0, this);
+//   set_as_callback_data(obj);
+//   set_as_callback_data_template(templ);
  }
 
 } // xnode

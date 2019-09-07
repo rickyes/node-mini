@@ -5,23 +5,23 @@
 
 namespace xnode {
 
-#define ENVIRONMENT_STRONG_PERSISTENT_VALUES(V) \
-    V(as_callback_data_template, v8::FunctionTemplate)   \
-    V(as_callback_data, v8::Object)
 
-#define V(PropertyName, TypeName) v8::Global<TypeName> PropertyName ## _;
-  ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
-#undef V
 
-#define V(TypeName, PropertyName)                                             \
-  v8::Eternal<TypeName> PropertyName ## _;
-#undef V
+// #define ENVIRONMENT_STRONG_PERSISTENT_VALUES(V) \
+//   V(as_callback_data, v8::Object)
 
-#define V(PropertyName, TypeName)                                             \
-  inline v8::Local<TypeName> PropertyName() const;                            \
-  inline void set_ ## PropertyName(v8::Local<TypeName> value);                \
-  ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
-#undef V
+// #define ENVIRONMENT_STRONG_PERSISTENT_TEMPLATES(V)                             \
+//   V(as_callback_data_template, v8::FunctionTemplate)  
+
+// #define V(PropertyName, TypeName)                                             \
+//   inline v8::Local<TypeName> PropertyName() const;                            \
+//   inline void set_ ## PropertyName(v8::Local<TypeName> value);                
+// #undef V
+
+// #define V(PropertyName, TypeName) v8::Global<TypeName> PropertyName ## _;
+//   ENVIRONMENT_STRONG_PERSISTENT_VALUES(V)
+//   ENVIRONMENT_STRONG_PERSISTENT_TEMPLATES(V)
+// #undef V
 
 class Environment {
     public:
@@ -37,6 +37,8 @@ class Environment {
             const v8::PropertyCallbackInfo<T>& info);
         static inline Environment* getCurrent(
             const v8::FunctionCallbackInfo<v8::Value>& args);
+
+        v8::Global<v8::Context> context_;
 
         inline v8::Isolate* isolate() const;
         inline v8::Local<v8::Context> context() const;
