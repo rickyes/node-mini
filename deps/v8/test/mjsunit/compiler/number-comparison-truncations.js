@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --allow-natives-syntax --opt
+// Flags: --allow-natives-syntax --opt --turbo-inlining
 
 // Test that SpeculativeNumberEqual[SignedSmall] properly passes the
 // kIdentifyZeros truncation.
@@ -12,6 +12,7 @@
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(0, 1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));
@@ -30,15 +31,12 @@
 // kIdentifyZeros truncation.
 (function() {
   // Produce a SpeculativeNumberEqual with Number feedback.
-  function bar(x, y) { return x === y; }
-  bar(0.1, 0.5);
-  bar(-0, 100);
-
   function foo(x, y) {
-    if (bar(x * y, 0)) return 0;
+    if (x * y === -0) return 0;
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(0, 1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));
@@ -61,6 +59,7 @@
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(1, -1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));
@@ -79,15 +78,12 @@
 // kIdentifyZeros truncation.
 (function() {
   // Produce a SpeculativeNumberLessThan with Number feedback.
-  function bar(x, y) { return x < y; }
-  bar(0.1, 0.5);
-  bar(-0, 100);
-
   function foo(x, y) {
-    if (bar(x * y, 0)) return 0;
+    if (x * y < -0) return 0;
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(1, -1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));
@@ -110,6 +106,7 @@
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(0, 1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));
@@ -128,15 +125,12 @@
 // kIdentifyZeros truncation.
 (function() {
   // Produce a SpeculativeNumberLessThanOrEqual with Number feedback.
-  function bar(x, y) { return x <= y; }
-  bar(0.1, 0.5);
-  bar(-0, 100);
-
   function foo(x, y) {
-    if (bar(x * y, 0)) return 0;
+    if (x * y <= -0) return 0;
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(0, 1));
   assertEquals(1, foo(1, 1));
   assertEquals(1, foo(1, 2));

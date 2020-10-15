@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/arguments-inl.h"
-#include "src/counters.h"
-#include "src/objects-inl.h"
+#include "src/execution/arguments-inl.h"
+#include "src/logging/counters.h"
 #include "src/objects/bigint.h"
+#include "src/objects/objects-inl.h"
 #include "src/runtime/runtime-utils.h"
 
 namespace v8 {
@@ -39,9 +39,11 @@ RUNTIME_FUNCTION(Runtime_BigIntCompareToString) {
   CONVERT_ARG_HANDLE_CHECKED(Smi, mode, 0);
   CONVERT_ARG_HANDLE_CHECKED(BigInt, lhs, 1);
   CONVERT_ARG_HANDLE_CHECKED(String, rhs, 2);
-  bool result =
-      ComparisonResultToBool(static_cast<Operation>(mode->value()),
-                             BigInt::CompareToString(isolate, lhs, rhs));
+  Maybe<ComparisonResult> maybe_result =
+      BigInt::CompareToString(isolate, lhs, rhs);
+  MAYBE_RETURN(maybe_result, ReadOnlyRoots(isolate).exception());
+  bool result = ComparisonResultToBool(static_cast<Operation>(mode->value()),
+                                       maybe_result.FromJust());
   return *isolate->factory()->ToBoolean(result);
 }
 
@@ -68,8 +70,9 @@ RUNTIME_FUNCTION(Runtime_BigIntEqualToString) {
   DCHECK_EQ(2, args.length());
   CONVERT_ARG_HANDLE_CHECKED(BigInt, lhs, 0);
   CONVERT_ARG_HANDLE_CHECKED(String, rhs, 1);
-  bool result = BigInt::EqualToString(isolate, lhs, rhs);
-  return *isolate->factory()->ToBoolean(result);
+  Maybe<bool> maybe_result = BigInt::EqualToString(isolate, lhs, rhs);
+  MAYBE_RETURN(maybe_result, ReadOnlyRoots(isolate).exception());
+  return *isolate->factory()->ToBoolean(maybe_result.FromJust());
 }
 
 RUNTIME_FUNCTION(Runtime_BigIntToBoolean) {

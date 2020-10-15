@@ -7,8 +7,8 @@
 
 #include <bitset>
 
+#include "src/objects/visitors.h"
 #include "src/snapshot/serializer.h"
-#include "src/visitors.h"
 
 namespace v8 {
 namespace internal {
@@ -20,32 +20,33 @@ enum class RootIndex : uint16_t;
 
 // Base class for serializer that iterate over roots. Also maintains a cache
 // that can be used to share non-root objects with other serializers.
-class RootsSerializer : public Serializer<> {
+class RootsSerializer : public Serializer {
  public:
   // The serializer expects that all roots before |first_root_to_be_serialized|
   // are already serialized.
-  RootsSerializer(Isolate* isolate, RootIndex first_root_to_be_serialized);
+  RootsSerializer(Isolate* isolate, Snapshot::SerializerFlags flags,
+                  RootIndex first_root_to_be_serialized);
 
   bool can_be_rehashed() const { return can_be_rehashed_; }
   bool root_has_been_serialized(RootIndex root_index) const {
     return root_has_been_serialized_.test(static_cast<size_t>(root_index));
   }
 
-  bool IsRootAndHasBeenSerialized(HeapObject* obj) const {
+  bool IsRootAndHasBeenSerialized(HeapObject obj) const {
     RootIndex root_index;
     return root_index_map()->Lookup(obj, &root_index) &&
            root_has_been_serialized(root_index);
   }
 
  protected:
-  void CheckRehashability(HeapObject* obj);
+  void CheckRehashability(HeapObject obj);
 
   // Serializes |object| if not previously seen and returns its cache index.
-  int SerializeInObjectCache(HeapObject* object);
+  int SerializeInObjectCache(Handle<HeapObject> object);
 
  private:
-  void VisitRootPointers(Root root, const char* description, ObjectSlot start,
-                         ObjectSlot end) override;
+  void VisitRootPointers(Root root, const char* description,
+                         FullObjectSlot start, FullObjectSlot end) override;
   void Synchronize(VisitorSynchronization::SyncTag tag) override;
 
   const RootIndex first_root_to_be_serialized_;

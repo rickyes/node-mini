@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "src/compiler/scheduler.h"
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/access-builder.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/compiler-source-position-table.h"
@@ -29,7 +30,11 @@ namespace compiler {
 class SchedulerTest : public TestWithIsolateAndZone {
  public:
   SchedulerTest()
-      : graph_(zone()), common_(zone()), simplified_(zone()), js_(zone()) {}
+      : TestWithIsolateAndZone(kCompressGraphZone),
+        graph_(zone()),
+        common_(zone()),
+        simplified_(zone()),
+        js_(zone()) {}
 
   Schedule* ComputeAndVerifySchedule(size_t expected) {
     if (FLAG_trace_turbo) {
@@ -38,8 +43,8 @@ class SchedulerTest : public TestWithIsolateAndZone {
       StdoutStream{} << AsJSON(*graph(), &table, &table2);
     }
 
-    Schedule* schedule =
-        Scheduler::ComputeSchedule(zone(), graph(), Scheduler::kSplitNodes);
+    Schedule* schedule = Scheduler::ComputeSchedule(
+        zone(), graph(), Scheduler::kSplitNodes, tick_counter(), nullptr);
 
     if (FLAG_trace_turbo_scheduler) {
       StdoutStream{} << *schedule << std::endl;
@@ -62,8 +67,10 @@ class SchedulerTest : public TestWithIsolateAndZone {
   CommonOperatorBuilder* common() { return &common_; }
   SimplifiedOperatorBuilder* simplified() { return &simplified_; }
   JSOperatorBuilder* js() { return &js_; }
+  TickCounter* tick_counter() { return &tick_counter_; }
 
  private:
+  TickCounter tick_counter_;
   Graph graph_;
   CommonOperatorBuilder common_;
   SimplifiedOperatorBuilder simplified_;
@@ -88,7 +95,8 @@ const Operator kMockTailCall(IrOpcode::kTailCall, Operator::kNoProperties,
 TEST_F(SchedulerTest, BuildScheduleEmpty) {
   graph()->SetStart(graph()->NewNode(common()->Start(0)));
   graph()->SetEnd(graph()->NewNode(common()->End(1), graph()->start()));
-  USE(Scheduler::ComputeSchedule(zone(), graph(), Scheduler::kNoFlags));
+  USE(Scheduler::ComputeSchedule(zone(), graph(), Scheduler::kNoFlags,
+                                 tick_counter(), nullptr));
 }
 
 
@@ -102,7 +110,8 @@ TEST_F(SchedulerTest, BuildScheduleOneParameter) {
 
   graph()->SetEnd(graph()->NewNode(common()->End(1), ret));
 
-  USE(Scheduler::ComputeSchedule(zone(), graph(), Scheduler::kNoFlags));
+  USE(Scheduler::ComputeSchedule(zone(), graph(), Scheduler::kNoFlags,
+                                 tick_counter(), nullptr));
 }
 
 

@@ -7,9 +7,10 @@
 #include <iomanip>
 
 #include "src/base/flags.h"
-#include "src/bootstrapper.h"
+#include "src/codegen/tick-counter.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph-reducer.h"
+#include "src/compiler/js-heap-broker.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/loop-variable-optimizer.h"
@@ -18,8 +19,8 @@
 #include "src/compiler/operation-typer.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/type-cache.h"
-#include "src/objects-inl.h"
-#include "src/objects/builtin-function-id.h"
+#include "src/init/bootstrapper.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -34,20 +35,21 @@ class Typer::Decorator final : public GraphDecorator {
   Typer* const typer_;
 };
 
-Typer::Typer(JSHeapBroker* broker, Flags flags, Graph* graph)
+Typer::Typer(JSHeapBroker* broker, Flags flags, Graph* graph,
+             TickCounter* tick_counter)
     : flags_(flags),
       graph_(graph),
       decorator_(nullptr),
       cache_(TypeCache::Get()),
       broker_(broker),
-      operation_typer_(broker, zone()) {
+      operation_typer_(broker, zone()),
+      tick_counter_(tick_counter) {
   singleton_false_ = operation_typer_.singleton_false();
   singleton_true_ = operation_typer_.singleton_true();
 
-  decorator_ = new (zone()) Decorator(this);
+  decorator_ = zone()->New<Decorator>(this);
   graph_->AddDecorator(decorator_);
 }
-
 
 Typer::~Typer() {
   graph_->RemoveDecorator(decorator_);
@@ -65,154 +67,92 @@ class Typer::Visitor : public Reducer {
 
   Reduction Reduce(Node* node) override {
     if (node->op()->ValueOutputCount() == 0) return NoChange();
-    switch (node->opcode()) {
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return UpdateType(node, TypeBinaryOp(node, x##Typer));
-      JS_SIMPLE_BINOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return UpdateType(node, Type##x(node));
-      DECLARE_CASE(Start)
-      DECLARE_CASE(IfException)
-      // VALUE_OP_LIST without JS_SIMPLE_BINOP_LIST:
-      COMMON_OP_LIST(DECLARE_CASE)
-      SIMPLIFIED_COMPARE_BINOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_OTHER_OP_LIST(DECLARE_CASE)
-      JS_SIMPLE_UNOP_LIST(DECLARE_CASE)
-      JS_OBJECT_OP_LIST(DECLARE_CASE)
-      JS_CONTEXT_OP_LIST(DECLARE_CASE)
-      JS_OTHER_OP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return UpdateType(node, TypeBinaryOp(node, x));
-      SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return UpdateType(node, TypeUnaryOp(node, x));
-      SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) case IrOpcode::k##x:
-      DECLARE_CASE(Loop)
-      DECLARE_CASE(Branch)
-      DECLARE_CASE(IfTrue)
-      DECLARE_CASE(IfFalse)
-      DECLARE_CASE(IfSuccess)
-      DECLARE_CASE(Switch)
-      DECLARE_CASE(IfValue)
-      DECLARE_CASE(IfDefault)
-      DECLARE_CASE(Merge)
-      DECLARE_CASE(Deoptimize)
-      DECLARE_CASE(DeoptimizeIf)
-      DECLARE_CASE(DeoptimizeUnless)
-      DECLARE_CASE(TrapIf)
-      DECLARE_CASE(TrapUnless)
-      DECLARE_CASE(Return)
-      DECLARE_CASE(TailCall)
-      DECLARE_CASE(Terminate)
-      DECLARE_CASE(OsrNormalEntry)
-      DECLARE_CASE(OsrLoopEntry)
-      DECLARE_CASE(Throw)
-      DECLARE_CASE(End)
-      SIMPLIFIED_CHANGE_OP_LIST(DECLARE_CASE)
-      SIMPLIFIED_CHECKED_OP_LIST(DECLARE_CASE)
-      MACHINE_SIMD_OP_LIST(DECLARE_CASE)
-      MACHINE_OP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-      break;
-    }
-    return NoChange();
+    return UpdateType(node, TypeNode(node));
   }
 
   Type TypeNode(Node* node) {
     switch (node->opcode()) {
-#define DECLARE_CASE(x) \
-      case IrOpcode::k##x: return TypeBinaryOp(node, x##Typer);
-      JS_SIMPLE_BINOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) case IrOpcode::k##x: return Type##x(node);
-      DECLARE_CASE(Start)
-      DECLARE_CASE(IfException)
-      // VALUE_OP_LIST without JS_SIMPLE_BINOP_LIST:
-      COMMON_OP_LIST(DECLARE_CASE)
-      SIMPLIFIED_COMPARE_BINOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_OTHER_OP_LIST(DECLARE_CASE)
-      JS_SIMPLE_UNOP_LIST(DECLARE_CASE)
-      JS_OBJECT_OP_LIST(DECLARE_CASE)
-      JS_CONTEXT_OP_LIST(DECLARE_CASE)
-      JS_OTHER_OP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return TypeBinaryOp(node, x);
-      SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) \
-  case IrOpcode::k##x:  \
-    return TypeUnaryOp(node, x);
-      SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_CASE)
-      SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-
-#define DECLARE_CASE(x) case IrOpcode::k##x:
-      DECLARE_CASE(Loop)
-      DECLARE_CASE(Branch)
-      DECLARE_CASE(IfTrue)
-      DECLARE_CASE(IfFalse)
-      DECLARE_CASE(IfSuccess)
-      DECLARE_CASE(Switch)
-      DECLARE_CASE(IfValue)
-      DECLARE_CASE(IfDefault)
-      DECLARE_CASE(Merge)
-      DECLARE_CASE(Deoptimize)
-      DECLARE_CASE(DeoptimizeIf)
-      DECLARE_CASE(DeoptimizeUnless)
-      DECLARE_CASE(TrapIf)
-      DECLARE_CASE(TrapUnless)
-      DECLARE_CASE(Return)
-      DECLARE_CASE(TailCall)
-      DECLARE_CASE(Terminate)
-      DECLARE_CASE(OsrNormalEntry)
-      DECLARE_CASE(OsrLoopEntry)
-      DECLARE_CASE(Throw)
-      DECLARE_CASE(End)
-      SIMPLIFIED_CHANGE_OP_LIST(DECLARE_CASE)
-      SIMPLIFIED_CHECKED_OP_LIST(DECLARE_CASE)
-      MACHINE_SIMD_OP_LIST(DECLARE_CASE)
-      MACHINE_OP_LIST(DECLARE_CASE)
-#undef DECLARE_CASE
-      break;
+#define DECLARE_UNARY_CASE(x, ...) \
+  case IrOpcode::k##x:             \
+    return Type##x(Operand(node, 0));
+      JS_SIMPLE_UNOP_LIST(DECLARE_UNARY_CASE)
+      SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_UNARY_CASE)
+      SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_UNARY_CASE)
+      SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_UNARY_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_UNARY_CASE)
+#undef DECLARE_UNARY_CASE
+#define DECLARE_BINARY_CASE(x, ...) \
+  case IrOpcode::k##x:              \
+    return Type##x(Operand(node, 0), Operand(node, 1));
+      JS_SIMPLE_BINOP_LIST(DECLARE_BINARY_CASE)
+      SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_BINARY_CASE)
+      SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_BINARY_CASE)
+      SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_BINARY_CASE)
+      SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_BINARY_CASE)
+#undef DECLARE_BINARY_CASE
+#define DECLARE_OTHER_CASE(x, ...) \
+  case IrOpcode::k##x:             \
+    return Type##x(node);
+      DECLARE_OTHER_CASE(Start)
+      DECLARE_OTHER_CASE(IfException)
+      COMMON_OP_LIST(DECLARE_OTHER_CASE)
+      SIMPLIFIED_COMPARE_BINOP_LIST(DECLARE_OTHER_CASE)
+      SIMPLIFIED_OTHER_OP_LIST(DECLARE_OTHER_CASE)
+      JS_OBJECT_OP_LIST(DECLARE_OTHER_CASE)
+      JS_CONTEXT_OP_LIST(DECLARE_OTHER_CASE)
+      JS_OTHER_OP_LIST(DECLARE_OTHER_CASE)
+#undef DECLARE_OTHER_CASE
+#define DECLARE_IMPOSSIBLE_CASE(x, ...) case IrOpcode::k##x:
+      DECLARE_IMPOSSIBLE_CASE(Loop)
+      DECLARE_IMPOSSIBLE_CASE(Branch)
+      DECLARE_IMPOSSIBLE_CASE(IfTrue)
+      DECLARE_IMPOSSIBLE_CASE(IfFalse)
+      DECLARE_IMPOSSIBLE_CASE(IfSuccess)
+      DECLARE_IMPOSSIBLE_CASE(Switch)
+      DECLARE_IMPOSSIBLE_CASE(IfValue)
+      DECLARE_IMPOSSIBLE_CASE(IfDefault)
+      DECLARE_IMPOSSIBLE_CASE(Merge)
+      DECLARE_IMPOSSIBLE_CASE(Deoptimize)
+      DECLARE_IMPOSSIBLE_CASE(DeoptimizeIf)
+      DECLARE_IMPOSSIBLE_CASE(DeoptimizeUnless)
+      DECLARE_IMPOSSIBLE_CASE(TrapIf)
+      DECLARE_IMPOSSIBLE_CASE(TrapUnless)
+      DECLARE_IMPOSSIBLE_CASE(Return)
+      DECLARE_IMPOSSIBLE_CASE(TailCall)
+      DECLARE_IMPOSSIBLE_CASE(Terminate)
+      DECLARE_IMPOSSIBLE_CASE(Throw)
+      DECLARE_IMPOSSIBLE_CASE(End)
+      SIMPLIFIED_CHANGE_OP_LIST(DECLARE_IMPOSSIBLE_CASE)
+      SIMPLIFIED_CHECKED_OP_LIST(DECLARE_IMPOSSIBLE_CASE)
+      MACHINE_SIMD_OP_LIST(DECLARE_IMPOSSIBLE_CASE)
+      MACHINE_OP_LIST(DECLARE_IMPOSSIBLE_CASE)
+#undef DECLARE_IMPOSSIBLE_CASE
+      UNREACHABLE();
     }
-    UNREACHABLE();
   }
 
   Type TypeConstant(Handle<Object> value);
+
+  bool InductionVariablePhiTypeIsPrefixedPoint(
+      InductionVariable* induction_var);
 
  private:
   Typer* typer_;
   LoopVariableOptimizer* induction_vars_;
   ZoneSet<NodeId> weakened_nodes_;
 
-#define DECLARE_METHOD(x) inline Type Type##x(Node* node);
+#define DECLARE_METHOD(x, ...) inline Type Type##x(Node* node);
   DECLARE_METHOD(Start)
   DECLARE_METHOD(IfException)
   COMMON_OP_LIST(DECLARE_METHOD)
   SIMPLIFIED_COMPARE_BINOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_OTHER_OP_LIST(DECLARE_METHOD)
-  JS_OP_LIST(DECLARE_METHOD)
+  JS_OBJECT_OP_LIST(DECLARE_METHOD)
+  JS_CONTEXT_OP_LIST(DECLARE_METHOD)
+  JS_OTHER_OP_LIST(DECLARE_METHOD)
+#undef DECLARE_METHOD
+#define DECLARE_METHOD(x, ...) inline Type Type##x(Type input);
+  JS_SIMPLE_UNOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 
   Type TypeOrNone(Node* node) {
@@ -235,11 +175,13 @@ class Typer::Visitor : public Reducer {
     return weakened_nodes_.find(node_id) != weakened_nodes_.end();
   }
 
-  typedef Type (*UnaryTyperFun)(Type, Typer* t);
-  typedef Type (*BinaryTyperFun)(Type, Type, Typer* t);
+  using UnaryTyperFun = Type (*)(Type, Typer* t);
+  using BinaryTyperFun = Type (*)(Type, Type, Typer* t);
 
-  Type TypeUnaryOp(Node* node, UnaryTyperFun);
-  Type TypeBinaryOp(Node* node, BinaryTyperFun);
+  inline Type TypeUnaryOp(Node* node, UnaryTyperFun);
+  inline Type TypeBinaryOp(Node* node, BinaryTyperFun);
+  inline Type TypeUnaryOp(Type input, UnaryTyperFun);
+  inline Type TypeBinaryOp(Type left, Type right, BinaryTyperFun);
 
   static Type BinaryNumberOpTyper(Type lhs, Type rhs, Typer* t,
                                   BinaryTyperFun f);
@@ -249,7 +191,7 @@ class Typer::Visitor : public Reducer {
     kComparisonFalse = 2,
     kComparisonUndefined = 4
   };
-  typedef base::Flags<ComparisonOutcomeFlags> ComparisonOutcome;
+  using ComparisonOutcome = base::Flags<ComparisonOutcomeFlags>;
 
   static ComparisonOutcome Invert(ComparisonOutcome, Typer*);
   static Type FalsifyUndefined(ComparisonOutcome, Typer*);
@@ -274,22 +216,48 @@ class Typer::Visitor : public Reducer {
     return t->operation_typer_.Name(type); \
   }
   SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 #define DECLARE_METHOD(Name)                       \
   static Type Name(Type lhs, Type rhs, Typer* t) { \
     return t->operation_typer_.Name(lhs, rhs);     \
   }
   SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_METHOD)
   SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
-
+#define DECLARE_METHOD(Name, ...)                  \
+  inline Type Type##Name(Type left, Type right) {  \
+    return TypeBinaryOp(left, right, Name##Typer); \
+  }
+  JS_SIMPLE_BINOP_LIST(DECLARE_METHOD)
+#undef DECLARE_METHOD
+#define DECLARE_METHOD(Name, ...)                 \
+  inline Type Type##Name(Type left, Type right) { \
+    return TypeBinaryOp(left, right, Name);       \
+  }
+  SIMPLIFIED_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_NUMBER_BINOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_BINOP_LIST(DECLARE_METHOD)
+#undef DECLARE_METHOD
+#define DECLARE_METHOD(Name, ...) \
+  inline Type Type##Name(Type input) { return TypeUnaryOp(input, Name); }
+  SIMPLIFIED_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_BIGINT_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_NUMBER_UNOP_LIST(DECLARE_METHOD)
+  SIMPLIFIED_SPECULATIVE_BIGINT_UNOP_LIST(DECLARE_METHOD)
+#undef DECLARE_METHOD
   static Type ObjectIsArrayBufferView(Type, Typer*);
   static Type ObjectIsBigInt(Type, Typer*);
   static Type ObjectIsCallable(Type, Typer*);
   static Type ObjectIsConstructor(Type, Typer*);
   static Type ObjectIsDetectableCallable(Type, Typer*);
   static Type ObjectIsMinusZero(Type, Typer*);
+  static Type NumberIsMinusZero(Type, Typer*);
   static Type ObjectIsNaN(Type, Typer*);
   static Type NumberIsNaN(Type, Typer*);
   static Type ObjectIsNonCallable(Type, Typer*);
@@ -303,7 +271,7 @@ class Typer::Visitor : public Reducer {
   static ComparisonOutcome JSCompareTyper(Type, Type, Typer*);
   static ComparisonOutcome NumberCompareTyper(Type, Type, Typer*);
 
-#define DECLARE_METHOD(x) static Type x##Typer(Type, Type, Typer*);
+#define DECLARE_METHOD(x, ...) static Type x##Typer(Type, Type, Typer*);
   JS_SIMPLE_BINOP_LIST(DECLARE_METHOD)
 #undef DECLARE_METHOD
 
@@ -314,6 +282,7 @@ class Typer::Visitor : public Reducer {
   static Type NumberLessThanOrEqualTyper(Type, Type, Typer*);
   static Type ReferenceEqualTyper(Type, Type, Typer*);
   static Type SameValueTyper(Type, Type, Typer*);
+  static Type SameValueNumbersOnlyTyper(Type, Type, Typer*);
   static Type StringFromSingleCharCodeTyper(Type, Typer*);
   static Type StringFromSingleCodePointTyper(Type, Typer*);
 
@@ -327,7 +296,12 @@ class Typer::Visitor : public Reducer {
         current = Weaken(node, current, previous);
       }
 
-      CHECK(previous.Is(current));
+      if (V8_UNLIKELY(!previous.Is(current))) {
+        AllowHandleDereference allow;
+        std::ostringstream ostream;
+        node->Print(ostream);
+        FATAL("UpdateType error for node %s", ostream.str().c_str());
+      }
 
       NodeProperties::SetType(node, current);
       if (!current.Is(previous)) {
@@ -351,12 +325,20 @@ void Typer::Run(const NodeVector& roots,
     induction_vars->ChangeToInductionVariablePhis();
   }
   Visitor visitor(this, induction_vars);
-  GraphReducer graph_reducer(zone(), graph());
+  GraphReducer graph_reducer(zone(), graph(), tick_counter_, broker());
   graph_reducer.AddReducer(&visitor);
   for (Node* const root : roots) graph_reducer.ReduceNode(root);
   graph_reducer.ReduceGraph();
 
   if (induction_vars != nullptr) {
+    // Validate the types computed by TypeInductionVariablePhi.
+    for (auto entry : induction_vars->induction_variables()) {
+      InductionVariable* induction_var = entry.second;
+      if (induction_var->phi()->opcode() == IrOpcode::kInductionVariablePhi) {
+        CHECK(visitor.InductionVariablePhiTypeIsPrefixedPoint(induction_var));
+      }
+    }
+
     induction_vars->ChangeToPhisAndInsertGuards();
   }
 }
@@ -387,12 +369,20 @@ void Typer::Decorator::Decorate(Node* node) {
 
 Type Typer::Visitor::TypeUnaryOp(Node* node, UnaryTyperFun f) {
   Type input = Operand(node, 0);
+  return TypeUnaryOp(input, f);
+}
+
+Type Typer::Visitor::TypeUnaryOp(Type input, UnaryTyperFun f) {
   return input.IsNone() ? Type::None() : f(input, typer_);
 }
 
 Type Typer::Visitor::TypeBinaryOp(Node* node, BinaryTyperFun f) {
   Type left = Operand(node, 0);
   Type right = Operand(node, 1);
+  return TypeBinaryOp(left, right, f);
+}
+
+Type Typer::Visitor::TypeBinaryOp(Type left, Type right, BinaryTyperFun f) {
   return left.IsNone() || right.IsNone() ? Type::None()
                                          : f(left, right, typer_);
 }
@@ -406,10 +396,12 @@ Type Typer::Visitor::BinaryNumberOpTyper(Type lhs, Type rhs, Typer* t,
   if (lhs_is_number && rhs_is_number) {
     return f(lhs, rhs, t);
   }
-  if (lhs_is_number || rhs_is_number) {
+  // In order to maintain monotonicity, the following two conditions are
+  // intentionally asymmetric.
+  if (lhs_is_number) {
     return Type::Number();
   }
-  if (lhs.Is(Type::BigInt()) || rhs.Is(Type::BigInt())) {
+  if (lhs.Is(Type::BigInt())) {
     return Type::BigInt();
   }
   return Type::Numeric();
@@ -425,12 +417,12 @@ Typer::Visitor::ComparisonOutcome Typer::Visitor::Invert(
 }
 
 Type Typer::Visitor::FalsifyUndefined(ComparisonOutcome outcome, Typer* t) {
+  if (outcome == 0) return Type::None();
   if ((outcome & kComparisonFalse) != 0 ||
       (outcome & kComparisonUndefined) != 0) {
     return (outcome & kComparisonTrue) != 0 ? Type::Boolean()
                                             : t->singleton_false_;
   }
-  // Type should be non empty, so we know it should be true.
   DCHECK_NE(0, outcome & kComparisonTrue);
   return t->singleton_true_;
 }
@@ -438,7 +430,7 @@ Type Typer::Visitor::FalsifyUndefined(ComparisonOutcome outcome, Typer* t) {
 Type Typer::Visitor::BitwiseNot(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberBitwiseXor(type, t->cache_.kSingletonMinusOne, t);
+    return NumberBitwiseXor(type, t->cache_->kSingletonMinusOne, t);
   }
   return Type::Numeric();
 }
@@ -446,7 +438,7 @@ Type Typer::Visitor::BitwiseNot(Type type, Typer* t) {
 Type Typer::Visitor::Decrement(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberSubtract(type, t->cache_.kSingletonOne, t);
+    return NumberSubtract(type, t->cache_->kSingletonOne, t);
   }
   return Type::Numeric();
 }
@@ -454,7 +446,7 @@ Type Typer::Visitor::Decrement(Type type, Typer* t) {
 Type Typer::Visitor::Increment(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberAdd(type, t->cache_.kSingletonOne, t);
+    return NumberAdd(type, t->cache_->kSingletonOne, t);
   }
   return Type::Numeric();
 }
@@ -462,7 +454,7 @@ Type Typer::Visitor::Increment(Type type, Typer* t) {
 Type Typer::Visitor::Negate(Type type, Typer* t) {
   type = ToNumeric(type, t);
   if (type.Is(Type::Number())) {
-    return NumberMultiply(type, t->cache_.kSingletonMinusOne, t);
+    return NumberMultiply(type, t->cache_->kSingletonMinusOne, t);
   }
   return Type::Numeric();
 }
@@ -485,13 +477,12 @@ Type Typer::Visitor::ToBoolean(Type type, Typer* t) {
 Type Typer::Visitor::ToInteger(Type type, Typer* t) {
   // ES6 section 7.1.4 ToInteger ( argument )
   type = ToNumber(type, t);
-  if (type.Is(t->cache_.kIntegerOrMinusZero)) return type;
-  if (type.Is(t->cache_.kIntegerOrMinusZeroOrNaN)) {
-    return Type::Union(
-        Type::Intersect(type, t->cache_.kIntegerOrMinusZero, t->zone()),
-        t->cache_.kSingletonZero, t->zone());
+  if (type.Is(t->cache_->kInteger)) return type;
+  if (type.Is(t->cache_->kIntegerOrMinusZeroOrNaN)) {
+    return Type::Union(Type::Intersect(type, t->cache_->kInteger, t->zone()),
+                       t->cache_->kSingletonZero, t->zone());
   }
-  return t->cache_.kIntegerOrMinusZero;
+  return t->cache_->kInteger;
 }
 
 
@@ -503,10 +494,10 @@ Type Typer::Visitor::ToLength(Type type, Typer* t) {
   double min = type.Min();
   double max = type.Max();
   if (max <= 0.0) {
-    return Type::NewConstant(0, t->zone());
+    return Type::Constant(0, t->zone());
   }
   if (min >= kMaxSafeInteger) {
-    return Type::NewConstant(kMaxSafeInteger, t->zone());
+    return Type::Constant(kMaxSafeInteger, t->zone());
   }
   if (min <= 0.0) min = 0.0;
   if (max >= kMaxSafeInteger) max = kMaxSafeInteger;
@@ -563,17 +554,20 @@ Type Typer::Visitor::ToString(Type type, Typer* t) {
 
 Type Typer::Visitor::ObjectIsArrayBufferView(Type type, Typer* t) {
   // TODO(turbofan): Introduce a Type::ArrayBufferView?
+  CHECK(!type.IsNone());
   if (!type.Maybe(Type::OtherObject())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsBigInt(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::BigInt())) return t->singleton_true_;
   if (!type.Maybe(Type::BigInt())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsCallable(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::Callable())) return t->singleton_true_;
   if (!type.Maybe(Type::Callable())) return t->singleton_false_;
   return Type::Boolean();
@@ -581,47 +575,62 @@ Type Typer::Visitor::ObjectIsCallable(Type type, Typer* t) {
 
 Type Typer::Visitor::ObjectIsConstructor(Type type, Typer* t) {
   // TODO(turbofan): Introduce a Type::Constructor?
+  CHECK(!type.IsNone());
   if (!type.Maybe(Type::Callable())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsDetectableCallable(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::DetectableCallable())) return t->singleton_true_;
   if (!type.Maybe(Type::DetectableCallable())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsMinusZero(Type type, Typer* t) {
+  CHECK(!type.IsNone());
+  if (type.Is(Type::MinusZero())) return t->singleton_true_;
+  if (!type.Maybe(Type::MinusZero())) return t->singleton_false_;
+  return Type::Boolean();
+}
+
+Type Typer::Visitor::NumberIsMinusZero(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::MinusZero())) return t->singleton_true_;
   if (!type.Maybe(Type::MinusZero())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsNaN(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::NaN())) return t->singleton_true_;
   if (!type.Maybe(Type::NaN())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::NumberIsNaN(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::NaN())) return t->singleton_true_;
   if (!type.Maybe(Type::NaN())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsNonCallable(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::NonCallable())) return t->singleton_true_;
   if (!type.Maybe(Type::NonCallable())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsNumber(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::Number())) return t->singleton_true_;
   if (!type.Maybe(Type::Number())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsReceiver(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::Receiver())) return t->singleton_true_;
   if (!type.Maybe(Type::Receiver())) return t->singleton_false_;
   return Type::Boolean();
@@ -633,18 +642,21 @@ Type Typer::Visitor::ObjectIsSmi(Type type, Typer* t) {
 }
 
 Type Typer::Visitor::ObjectIsString(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::String())) return t->singleton_true_;
   if (!type.Maybe(Type::String())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsSymbol(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::Symbol())) return t->singleton_true_;
   if (!type.Maybe(Type::Symbol())) return t->singleton_false_;
   return Type::Boolean();
 }
 
 Type Typer::Visitor::ObjectIsUndetectable(Type type, Typer* t) {
+  CHECK(!type.IsNone());
   if (type.Is(Type::Undetectable())) return t->singleton_true_;
   if (!type.Maybe(Type::Undetectable())) return t->singleton_false_;
   return Type::Boolean();
@@ -684,20 +696,28 @@ Type Typer::Visitor::TypeParameter(Node* node) {
       return Type::Union(Type::Receiver(), Type::Undefined(), typer_->zone());
     }
   } else if (index == Linkage::GetJSCallArgCountParamIndex(parameter_count)) {
-    return Type::Range(0.0, Code::kMaxArguments, typer_->zone());
+    return Type::Range(0.0, FixedArray::kMaxLength, typer_->zone());
   } else if (index == Linkage::GetJSCallContextParamIndex(parameter_count)) {
     return Type::OtherInternal();
   }
   return Type::NonInternal();
 }
 
-Type Typer::Visitor::TypeOsrValue(Node* node) { return Type::Any(); }
+Type Typer::Visitor::TypeOsrValue(Node* node) {
+  if (OsrValueIndexOf(node->op()) == Linkage::kOsrContextSpillSlotIndex) {
+    return Type::OtherInternal();
+  } else {
+    return Type::Any();
+  }
+}
 
 Type Typer::Visitor::TypeRetain(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeInt32Constant(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeInt64Constant(Node* node) { UNREACHABLE(); }
+
+Type Typer::Visitor::TypeTaggedIndexConstant(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeRelocatableInt32Constant(Node* node) { UNREACHABLE(); }
 
@@ -709,12 +729,14 @@ Type Typer::Visitor::TypeFloat64Constant(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeNumberConstant(Node* node) {
   double number = OpParameter<double>(node->op());
-  return Type::NewConstant(number, zone());
+  return Type::Constant(number, zone());
 }
 
 Type Typer::Visitor::TypeHeapConstant(Node* node) {
   return TypeConstant(HeapConstantOf(node->op()));
 }
+
+Type Typer::Visitor::TypeCompressedHeapConstant(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeExternalConstant(Node* node) {
   return Type::ExternalPointer();
@@ -745,15 +767,23 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
   Type initial_type = Operand(node, 0);
   Type increment_type = Operand(node, 2);
 
-  // We only handle integer induction variables (otherwise ranges
-  // do not apply and we cannot do anything).
-  if (!initial_type.Is(typer_->cache_.kInteger) ||
-      !increment_type.Is(typer_->cache_.kInteger)) {
-    // Fallback to normal phi typing, but ensure monotonicity.
-    // (Unfortunately, without baking in the previous type, monotonicity might
-    // be violated because we might not yet have retyped the incrementing
-    // operation even though the increment's type might been already reflected
-    // in the induction variable phi.)
+  // Fallback to normal phi typing in a variety of cases:
+  // - when the induction variable is not initially of type Integer, because we
+  //   want to work with ranges in the algorithm below.
+  // - when the increment is zero, because in that case normal phi typing will
+  //   generally yield a more precise type.
+  // - when the induction variable can become NaN (through addition/subtraction
+  //   of opposing infinities), because the code below can't handle that case.
+  if (initial_type.IsNone() ||
+      increment_type.Is(typer_->cache_->kSingletonZero) ||
+      !initial_type.Is(typer_->cache_->kInteger) ||
+      !increment_type.Is(typer_->cache_->kInteger) ||
+      increment_type.Min() == -V8_INFINITY ||
+      increment_type.Max() == +V8_INFINITY) {
+    // Unfortunately, without baking in the previous type, monotonicity might be
+    // violated because we might not yet have retyped the incrementing operation
+    // even though the increment's type might been already reflected in the
+    // induction variable phi.
     Type type = NodeProperties::IsTyped(node) ? NodeProperties::GetType(node)
                                               : Type::None();
     for (int i = 0; i < arity; ++i) {
@@ -761,18 +791,10 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     }
     return type;
   }
-  // If we do not have enough type information for the initial value or
-  // the increment, just return the initial value's type.
-  if (initial_type.IsNone() ||
-      increment_type.Is(typer_->cache_.kSingletonZero)) {
-    return initial_type;
-  }
 
-  // Now process the bounds.
   auto res = induction_vars_->induction_variables().find(node->id());
-  DCHECK(res != induction_vars_->induction_variables().end());
+  DCHECK_NE(res, induction_vars_->induction_variables().end());
   InductionVariable* induction_var = res->second;
-
   InductionVariable::ArithmeticType arithmetic_type = induction_var->Type();
 
   double min = -V8_INFINITY;
@@ -784,18 +806,18 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     increment_min = increment_type.Min();
     increment_max = increment_type.Max();
   } else {
-    DCHECK_EQ(InductionVariable::ArithmeticType::kSubtraction, arithmetic_type);
+    DCHECK_EQ(arithmetic_type, InductionVariable::ArithmeticType::kSubtraction);
     increment_min = -increment_type.Max();
     increment_max = -increment_type.Min();
   }
 
   if (increment_min >= 0) {
-    // increasing sequence
+    // Increasing sequence.
     min = initial_type.Min();
     for (auto bound : induction_var->upper_bounds()) {
       Type bound_type = TypeOrNone(bound.bound);
       // If the type is not an integer, just skip the bound.
-      if (!bound_type.Is(typer_->cache_.kInteger)) continue;
+      if (!bound_type.Is(typer_->cache_->kInteger)) continue;
       // If the type is not inhabited, then we can take the initial value.
       if (bound_type.IsNone()) {
         max = initial_type.Max();
@@ -810,12 +832,12 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     // The upper bound must be at least the initial value's upper bound.
     max = std::max(max, initial_type.Max());
   } else if (increment_max <= 0) {
-    // decreasing sequence
+    // Decreasing sequence.
     max = initial_type.Max();
     for (auto bound : induction_var->lower_bounds()) {
       Type bound_type = TypeOrNone(bound.bound);
       // If the type is not an integer, just skip the bound.
-      if (!bound_type.Is(typer_->cache_.kInteger)) continue;
+      if (!bound_type.Is(typer_->cache_->kInteger)) continue;
       // If the type is not inhabited, then we can take the initial value.
       if (bound_type.IsNone()) {
         min = initial_type.Min();
@@ -830,10 +852,13 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
     // The lower bound must be at most the initial value's lower bound.
     min = std::min(min, initial_type.Min());
   } else {
-    // Shortcut: If the increment can be both positive and negative,
-    // the variable can go arbitrarily far, so just return integer.
-    return typer_->cache_.kInteger;
+    // If the increment can be both positive and negative, the variable can go
+    // arbitrarily far. Use the maximal range in that case. Note that this may
+    // be less precise than what ordinary typing would produce.
+    min = -V8_INFINITY;
+    max = +V8_INFINITY;
   }
+
   if (FLAG_trace_turbo_loop) {
     StdoutStream{} << std::setprecision(10) << "Loop ("
                    << NodeProperties::GetControlInput(node)->id()
@@ -845,7 +870,66 @@ Type Typer::Visitor::TypeInductionVariablePhi(Node* node) {
                    << " for phi " << node->id() << ": (" << min << ", " << max
                    << ")\n";
   }
+
   return Type::Range(min, max, typer_->zone());
+}
+
+bool Typer::Visitor::InductionVariablePhiTypeIsPrefixedPoint(
+    InductionVariable* induction_var) {
+  Node* node = induction_var->phi();
+  DCHECK_EQ(node->opcode(), IrOpcode::kInductionVariablePhi);
+  Type type = NodeProperties::GetType(node);
+  Type initial_type = Operand(node, 0);
+  Node* arith = node->InputAt(1);
+  Type increment_type = Operand(node, 2);
+
+  // Intersect {type} with useful bounds.
+  for (auto bound : induction_var->upper_bounds()) {
+    Type bound_type = TypeOrNone(bound.bound);
+    if (!bound_type.Is(typer_->cache_->kInteger)) continue;
+    if (!bound_type.IsNone()) {
+      bound_type = Type::Range(
+          -V8_INFINITY,
+          bound_type.Max() - (bound.kind == InductionVariable::kStrict),
+          zone());
+    }
+    type = Type::Intersect(type, bound_type, typer_->zone());
+  }
+  for (auto bound : induction_var->lower_bounds()) {
+    Type bound_type = TypeOrNone(bound.bound);
+    if (!bound_type.Is(typer_->cache_->kInteger)) continue;
+    if (!bound_type.IsNone()) {
+      bound_type = Type::Range(
+          bound_type.Min() + (bound.kind == InductionVariable::kStrict),
+          +V8_INFINITY, typer_->zone());
+    }
+    type = Type::Intersect(type, bound_type, typer_->zone());
+  }
+
+  // Apply ordinary typing to the "increment" operation.
+  // clang-format off
+  switch (arith->opcode()) {
+#define CASE(x)                             \
+    case IrOpcode::k##x:                    \
+      type = Type##x(type, increment_type); \
+      break;
+    CASE(JSAdd)
+    CASE(JSSubtract)
+    CASE(NumberAdd)
+    CASE(NumberSubtract)
+    CASE(SpeculativeNumberAdd)
+    CASE(SpeculativeNumberSubtract)
+    CASE(SpeculativeSafeIntegerAdd)
+    CASE(SpeculativeSafeIntegerSubtract)
+#undef CASE
+    default:
+      UNREACHABLE();
+  }
+  // clang-format on
+
+  type = Type::Union(initial_type, type, typer_->zone());
+
+  return type.Is(NodeProperties::GetType(node));
 }
 
 Type Typer::Visitor::TypeEffectPhi(Node* node) { UNREACHABLE(); }
@@ -901,9 +985,7 @@ Type Typer::Visitor::TypeTypedObjectState(Node* node) {
 
 Type Typer::Visitor::TypeCall(Node* node) { return Type::Any(); }
 
-Type Typer::Visitor::TypeCallWithCallerSavedRegisters(Node* node) {
-  UNREACHABLE();
-}
+Type Typer::Visitor::TypeFastApiCall(Node* node) { return Type::Any(); }
 
 Type Typer::Visitor::TypeProjection(Node* node) {
   Type const type = Operand(node, 0);
@@ -922,15 +1004,20 @@ Type Typer::Visitor::TypeTypeGuard(Node* node) {
   return typer_->operation_typer()->TypeTypeGuard(node->op(), type);
 }
 
+Type Typer::Visitor::TypeFoldConstant(Node* node) { return Operand(node, 0); }
+
 Type Typer::Visitor::TypeDead(Node* node) { return Type::None(); }
 
 Type Typer::Visitor::TypeDeadValue(Node* node) { return Type::None(); }
 
 Type Typer::Visitor::TypeUnreachable(Node* node) { return Type::None(); }
 
+Type Typer::Visitor::TypeStaticAssert(Node* node) { UNREACHABLE(); }
+
 // JS comparison operators.
 
 Type Typer::Visitor::JSEqualTyper(Type lhs, Type rhs, Typer* t) {
+  if (lhs.IsNone() || rhs.IsNone()) return Type::None();
   if (lhs.Is(Type::NaN()) || rhs.Is(Type::NaN())) return t->singleton_false_;
   if (lhs.Is(Type::NullOrUndefined()) && rhs.Is(Type::NullOrUndefined())) {
     return t->singleton_true_;
@@ -939,9 +1026,10 @@ Type Typer::Visitor::JSEqualTyper(Type lhs, Type rhs, Typer* t) {
       (lhs.Max() < rhs.Min() || lhs.Min() > rhs.Max())) {
     return t->singleton_false_;
   }
-  if (lhs.IsHeapConstant() && rhs.Is(lhs)) {
+  if (lhs.IsSingleton() && rhs.Is(lhs)) {
     // Types are equal and are inhabited only by a single semantic value,
     // which is not nan due to the earlier check.
+    DCHECK(lhs.Is(rhs));
     return t->singleton_true_;
   }
   return Type::Boolean();
@@ -980,6 +1068,8 @@ Typer::Visitor::ComparisonOutcome Typer::Visitor::NumberCompareTyper(Type lhs,
   DCHECK(lhs.Is(Type::Number()));
   DCHECK(rhs.Is(Type::Number()));
 
+  if (lhs.IsNone() || rhs.IsNone()) return {};
+
   // Shortcut for NaNs.
   if (lhs.Is(Type::NaN()) || rhs.Is(Type::NaN())) return kComparisonUndefined;
 
@@ -992,11 +1082,9 @@ Typer::Visitor::ComparisonOutcome Typer::Visitor::NumberCompareTyper(Type lhs,
   } else if (lhs.Max() < rhs.Min()) {
     result = kComparisonTrue;
   } else {
-    // We cannot figure out the result, return both true and false. (We do not
-    // have to return undefined because that cannot affect the result of
-    // FalsifyUndefined.)
     return ComparisonOutcome(kComparisonTrue) |
-           ComparisonOutcome(kComparisonFalse);
+           ComparisonOutcome(kComparisonFalse) |
+           ComparisonOutcome(kComparisonUndefined);
   }
   // Add the undefined if we could see NaN.
   if (lhs.Maybe(Type::NaN()) || rhs.Maybe(Type::NaN())) {
@@ -1087,59 +1175,34 @@ Type Typer::Visitor::JSExponentiateTyper(Type lhs, Type rhs, Typer* t) {
 
 // JS unary operators.
 
-Type Typer::Visitor::TypeJSBitwiseNot(Node* node) {
-  return TypeUnaryOp(node, BitwiseNot);
-}
-
-Type Typer::Visitor::TypeJSDecrement(Node* node) {
-  return TypeUnaryOp(node, Decrement);
-}
-
-Type Typer::Visitor::TypeJSIncrement(Node* node) {
-  return TypeUnaryOp(node, Increment);
-}
-
-Type Typer::Visitor::TypeJSNegate(Node* node) {
-  return TypeUnaryOp(node, Negate);
-}
+#define DEFINE_METHOD(Name)                       \
+  Type Typer::Visitor::TypeJS##Name(Type input) { \
+    return TypeUnaryOp(input, Name);              \
+  }
+DEFINE_METHOD(BitwiseNot)
+DEFINE_METHOD(Decrement)
+DEFINE_METHOD(Increment)
+DEFINE_METHOD(Negate)
+DEFINE_METHOD(ToLength)
+DEFINE_METHOD(ToName)
+DEFINE_METHOD(ToNumber)
+DEFINE_METHOD(ToNumberConvertBigInt)
+DEFINE_METHOD(ToNumeric)
+DEFINE_METHOD(ToObject)
+DEFINE_METHOD(ToString)
+#undef DEFINE_METHOD
 
 Type Typer::Visitor::TypeTypeOf(Node* node) {
   return Type::InternalizedString();
 }
 
+Type Typer::Visitor::TypeTierUpCheck(Node* node) { UNREACHABLE(); }
+Type Typer::Visitor::TypeUpdateInterruptBudget(Node* node) { UNREACHABLE(); }
 
 // JS conversion operators.
 
 Type Typer::Visitor::TypeToBoolean(Node* node) {
   return TypeUnaryOp(node, ToBoolean);
-}
-
-Type Typer::Visitor::TypeJSToLength(Node* node) {
-  return TypeUnaryOp(node, ToLength);
-}
-
-Type Typer::Visitor::TypeJSToName(Node* node) {
-  return TypeUnaryOp(node, ToName);
-}
-
-Type Typer::Visitor::TypeJSToNumber(Node* node) {
-  return TypeUnaryOp(node, ToNumber);
-}
-
-Type Typer::Visitor::TypeJSToNumberConvertBigInt(Node* node) {
-  return TypeUnaryOp(node, ToNumberConvertBigInt);
-}
-
-Type Typer::Visitor::TypeJSToNumeric(Node* node) {
-  return TypeUnaryOp(node, ToNumeric);
-}
-
-Type Typer::Visitor::TypeJSToObject(Node* node) {
-  return TypeUnaryOp(node, ToObject);
-}
-
-Type Typer::Visitor::TypeJSToString(Node* node) {
-  return TypeUnaryOp(node, ToString);
 }
 
 // JS object operators.
@@ -1235,17 +1298,25 @@ Type Typer::Visitor::TypeJSCreateLiteralRegExp(Node* node) {
   return Type::OtherObject();
 }
 
+Type Typer::Visitor::TypeJSGetTemplateObject(Node* node) {
+  return Type::Array();
+}
+
 Type Typer::Visitor::TypeJSLoadProperty(Node* node) {
   return Type::NonInternal();
 }
 
 Type Typer::Visitor::TypeJSLoadNamed(Node* node) { return Type::NonInternal(); }
 
+Type Typer::Visitor::TypeJSLoadNamedFromSuper(Node* node) {
+  return Type::NonInternal();
+}
+
 Type Typer::Visitor::TypeJSLoadGlobal(Node* node) {
   return Type::NonInternal();
 }
 
-Type Typer::Visitor::TypeJSParseInt(Node* node) { return Type::Number(); }
+Type Typer::Visitor::TypeJSParseInt(Type input) { return Type::Number(); }
 
 Type Typer::Visitor::TypeJSRegExpTest(Node* node) { return Type::Boolean(); }
 
@@ -1272,7 +1343,7 @@ Type Typer::Visitor::Weaken(Node* node, Type current_type, Type previous_type) {
   STATIC_ASSERT(arraysize(kWeakenMinLimits) == arraysize(kWeakenMaxLimits));
 
   // If the types have nothing to do with integers, return the types.
-  Type const integer = typer_->cache_.kInteger;
+  Type const integer = typer_->cache_->kInteger;
   if (!previous_type.Maybe(integer)) {
     return current_type;
   }
@@ -1367,12 +1438,14 @@ Type Typer::Visitor::TypeJSGetSuperConstructor(Node* node) {
 }
 
 // JS context operators.
+Type Typer::Visitor::TypeJSHasContextExtension(Node* node) {
+  return Type::Boolean();
+}
 
 Type Typer::Visitor::TypeJSLoadContext(Node* node) {
   ContextAccess const& access = ContextAccessOf(node->op());
   switch (access.index()) {
     case Context::PREVIOUS_INDEX:
-    case Context::NATIVE_CONTEXT_INDEX:
     case Context::SCOPE_INFO_INDEX:
       return Type::OtherInternal();
     default:
@@ -1423,289 +1496,295 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     return Type::NonInternal();
   }
   JSFunctionRef function = fun.AsHeapConstant()->Ref().AsJSFunction();
-  if (!function.shared().HasBuiltinFunctionId()) {
+  if (!function.serialized()) {
+    TRACE_BROKER_MISSING(t->broker(), "data for function " << function);
     return Type::NonInternal();
   }
-  switch (function.shared().builtin_function_id()) {
-    case BuiltinFunctionId::kMathRandom:
+  if (!function.shared().HasBuiltinId()) {
+    return Type::NonInternal();
+  }
+  switch (function.shared().builtin_id()) {
+    case Builtins::kMathRandom:
       return Type::PlainNumber();
-    case BuiltinFunctionId::kMathFloor:
-    case BuiltinFunctionId::kMathCeil:
-    case BuiltinFunctionId::kMathRound:
-    case BuiltinFunctionId::kMathTrunc:
-      return t->cache_.kIntegerOrMinusZeroOrNaN;
+    case Builtins::kMathFloor:
+    case Builtins::kMathCeil:
+    case Builtins::kMathRound:
+    case Builtins::kMathTrunc:
+      return t->cache_->kIntegerOrMinusZeroOrNaN;
     // Unary math functions.
-    case BuiltinFunctionId::kMathAbs:
-    case BuiltinFunctionId::kMathExp:
+    case Builtins::kMathAbs:
+    case Builtins::kMathExp:
       return Type::Union(Type::PlainNumber(), Type::NaN(), t->zone());
-    case BuiltinFunctionId::kMathAcos:
-    case BuiltinFunctionId::kMathAcosh:
-    case BuiltinFunctionId::kMathAsin:
-    case BuiltinFunctionId::kMathAsinh:
-    case BuiltinFunctionId::kMathAtan:
-    case BuiltinFunctionId::kMathAtanh:
-    case BuiltinFunctionId::kMathCbrt:
-    case BuiltinFunctionId::kMathCos:
-    case BuiltinFunctionId::kMathExpm1:
-    case BuiltinFunctionId::kMathFround:
-    case BuiltinFunctionId::kMathLog:
-    case BuiltinFunctionId::kMathLog1p:
-    case BuiltinFunctionId::kMathLog10:
-    case BuiltinFunctionId::kMathLog2:
-    case BuiltinFunctionId::kMathSin:
-    case BuiltinFunctionId::kMathSqrt:
-    case BuiltinFunctionId::kMathTan:
+    case Builtins::kMathAcos:
+    case Builtins::kMathAcosh:
+    case Builtins::kMathAsin:
+    case Builtins::kMathAsinh:
+    case Builtins::kMathAtan:
+    case Builtins::kMathAtanh:
+    case Builtins::kMathCbrt:
+    case Builtins::kMathCos:
+    case Builtins::kMathExpm1:
+    case Builtins::kMathFround:
+    case Builtins::kMathLog:
+    case Builtins::kMathLog1p:
+    case Builtins::kMathLog10:
+    case Builtins::kMathLog2:
+    case Builtins::kMathSin:
+    case Builtins::kMathSqrt:
+    case Builtins::kMathTan:
       return Type::Number();
-    case BuiltinFunctionId::kMathSign:
-      return t->cache_.kMinusOneToOneOrMinusZeroOrNaN;
+    case Builtins::kMathSign:
+      return t->cache_->kMinusOneToOneOrMinusZeroOrNaN;
     // Binary math functions.
-    case BuiltinFunctionId::kMathAtan2:
-    case BuiltinFunctionId::kMathPow:
-    case BuiltinFunctionId::kMathMax:
-    case BuiltinFunctionId::kMathMin:
+    case Builtins::kMathAtan2:
+    case Builtins::kMathPow:
+    case Builtins::kMathMax:
+    case Builtins::kMathMin:
+    case Builtins::kMathHypot:
       return Type::Number();
-    case BuiltinFunctionId::kMathImul:
+    case Builtins::kMathImul:
       return Type::Signed32();
-    case BuiltinFunctionId::kMathClz32:
-      return t->cache_.kZeroToThirtyTwo;
+    case Builtins::kMathClz32:
+      return t->cache_->kZeroToThirtyTwo;
     // Date functions.
-    case BuiltinFunctionId::kDateNow:
-      return t->cache_.kTimeValueType;
-    case BuiltinFunctionId::kDateGetDate:
-      return t->cache_.kJSDateDayType;
-    case BuiltinFunctionId::kDateGetDay:
-      return t->cache_.kJSDateWeekdayType;
-    case BuiltinFunctionId::kDateGetFullYear:
-      return t->cache_.kJSDateYearType;
-    case BuiltinFunctionId::kDateGetHours:
-      return t->cache_.kJSDateHourType;
-    case BuiltinFunctionId::kDateGetMilliseconds:
+    case Builtins::kDateNow:
+      return t->cache_->kTimeValueType;
+    case Builtins::kDatePrototypeGetDate:
+      return t->cache_->kJSDateDayType;
+    case Builtins::kDatePrototypeGetDay:
+      return t->cache_->kJSDateWeekdayType;
+    case Builtins::kDatePrototypeGetFullYear:
+      return t->cache_->kJSDateYearType;
+    case Builtins::kDatePrototypeGetHours:
+      return t->cache_->kJSDateHourType;
+    case Builtins::kDatePrototypeGetMilliseconds:
       return Type::Union(Type::Range(0.0, 999.0, t->zone()), Type::NaN(),
                          t->zone());
-    case BuiltinFunctionId::kDateGetMinutes:
-      return t->cache_.kJSDateMinuteType;
-    case BuiltinFunctionId::kDateGetMonth:
-      return t->cache_.kJSDateMonthType;
-    case BuiltinFunctionId::kDateGetSeconds:
-      return t->cache_.kJSDateSecondType;
-    case BuiltinFunctionId::kDateGetTime:
-      return t->cache_.kJSDateValueType;
+    case Builtins::kDatePrototypeGetMinutes:
+      return t->cache_->kJSDateMinuteType;
+    case Builtins::kDatePrototypeGetMonth:
+      return t->cache_->kJSDateMonthType;
+    case Builtins::kDatePrototypeGetSeconds:
+      return t->cache_->kJSDateSecondType;
+    case Builtins::kDatePrototypeGetTime:
+      return t->cache_->kJSDateValueType;
 
     // Symbol functions.
-    case BuiltinFunctionId::kSymbolConstructor:
+    case Builtins::kSymbolConstructor:
       return Type::Symbol();
-    case BuiltinFunctionId::kSymbolPrototypeToString:
+    case Builtins::kSymbolPrototypeToString:
       return Type::String();
-    case BuiltinFunctionId::kSymbolPrototypeValueOf:
+    case Builtins::kSymbolPrototypeValueOf:
       return Type::Symbol();
 
     // BigInt functions.
-    case BuiltinFunctionId::kBigIntConstructor:
+    case Builtins::kBigIntConstructor:
       return Type::BigInt();
 
     // Number functions.
-    case BuiltinFunctionId::kNumberConstructor:
+    case Builtins::kNumberConstructor:
       return Type::Number();
-    case BuiltinFunctionId::kNumberIsFinite:
-    case BuiltinFunctionId::kNumberIsInteger:
-    case BuiltinFunctionId::kNumberIsNaN:
-    case BuiltinFunctionId::kNumberIsSafeInteger:
+    case Builtins::kNumberIsFinite:
+    case Builtins::kNumberIsInteger:
+    case Builtins::kNumberIsNaN:
+    case Builtins::kNumberIsSafeInteger:
       return Type::Boolean();
-    case BuiltinFunctionId::kNumberParseFloat:
+    case Builtins::kNumberParseFloat:
       return Type::Number();
-    case BuiltinFunctionId::kNumberParseInt:
-      return t->cache_.kIntegerOrMinusZeroOrNaN;
-    case BuiltinFunctionId::kNumberToString:
+    case Builtins::kNumberParseInt:
+      return t->cache_->kIntegerOrMinusZeroOrNaN;
+    case Builtins::kNumberToString:
       return Type::String();
 
     // String functions.
-    case BuiltinFunctionId::kStringConstructor:
+    case Builtins::kStringConstructor:
       return Type::String();
-    case BuiltinFunctionId::kStringCharCodeAt:
+    case Builtins::kStringPrototypeCharCodeAt:
       return Type::Union(Type::Range(0, kMaxUInt16, t->zone()), Type::NaN(),
                          t->zone());
-    case BuiltinFunctionId::kStringCharAt:
+    case Builtins::kStringCharAt:
       return Type::String();
-    case BuiltinFunctionId::kStringCodePointAt:
+    case Builtins::kStringPrototypeCodePointAt:
       return Type::Union(Type::Range(0.0, String::kMaxCodePoint, t->zone()),
                          Type::Undefined(), t->zone());
-    case BuiltinFunctionId::kStringConcat:
-    case BuiltinFunctionId::kStringFromCharCode:
-    case BuiltinFunctionId::kStringFromCodePoint:
+    case Builtins::kStringPrototypeConcat:
+    case Builtins::kStringFromCharCode:
+    case Builtins::kStringFromCodePoint:
       return Type::String();
-    case BuiltinFunctionId::kStringIndexOf:
-    case BuiltinFunctionId::kStringLastIndexOf:
+    case Builtins::kStringPrototypeIndexOf:
+    case Builtins::kStringPrototypeLastIndexOf:
       return Type::Range(-1.0, String::kMaxLength, t->zone());
-    case BuiltinFunctionId::kStringEndsWith:
-    case BuiltinFunctionId::kStringIncludes:
+    case Builtins::kStringPrototypeEndsWith:
+    case Builtins::kStringPrototypeIncludes:
       return Type::Boolean();
-    case BuiltinFunctionId::kStringRaw:
-    case BuiltinFunctionId::kStringRepeat:
-    case BuiltinFunctionId::kStringSlice:
+    case Builtins::kStringRaw:
+    case Builtins::kStringRepeat:
+    case Builtins::kStringPrototypeSlice:
       return Type::String();
-    case BuiltinFunctionId::kStringStartsWith:
+    case Builtins::kStringPrototypeStartsWith:
       return Type::Boolean();
-    case BuiltinFunctionId::kStringSubstr:
-    case BuiltinFunctionId::kStringSubstring:
-    case BuiltinFunctionId::kStringToLowerCase:
-    case BuiltinFunctionId::kStringToString:
-    case BuiltinFunctionId::kStringToUpperCase:
-    case BuiltinFunctionId::kStringTrim:
-    case BuiltinFunctionId::kStringTrimEnd:
-    case BuiltinFunctionId::kStringTrimStart:
-    case BuiltinFunctionId::kStringValueOf:
+    case Builtins::kStringPrototypeSubstr:
+    case Builtins::kStringSubstring:
+    case Builtins::kStringPrototypeToString:
+#ifdef V8_INTL_SUPPORT
+    case Builtins::kStringPrototypeToLowerCaseIntl:
+    case Builtins::kStringPrototypeToUpperCaseIntl:
+#else
+    case Builtins::kStringPrototypeToLowerCase:
+    case Builtins::kStringPrototypeToUpperCase:
+#endif
+    case Builtins::kStringPrototypeTrim:
+    case Builtins::kStringPrototypeTrimEnd:
+    case Builtins::kStringPrototypeTrimStart:
+    case Builtins::kStringPrototypeValueOf:
       return Type::String();
 
-    case BuiltinFunctionId::kStringIterator:
-    case BuiltinFunctionId::kStringIteratorNext:
+    case Builtins::kStringPrototypeIterator:
+    case Builtins::kStringIteratorPrototypeNext:
       return Type::OtherObject();
 
-    case BuiltinFunctionId::kArrayEntries:
-    case BuiltinFunctionId::kArrayKeys:
-    case BuiltinFunctionId::kArrayValues:
-    case BuiltinFunctionId::kTypedArrayEntries:
-    case BuiltinFunctionId::kTypedArrayKeys:
-    case BuiltinFunctionId::kTypedArrayValues:
-    case BuiltinFunctionId::kArrayIteratorNext:
-    case BuiltinFunctionId::kMapIteratorNext:
-    case BuiltinFunctionId::kSetIteratorNext:
+    case Builtins::kArrayPrototypeEntries:
+    case Builtins::kArrayPrototypeKeys:
+    case Builtins::kArrayPrototypeValues:
+    case Builtins::kTypedArrayPrototypeEntries:
+    case Builtins::kTypedArrayPrototypeKeys:
+    case Builtins::kTypedArrayPrototypeValues:
+    case Builtins::kArrayIteratorPrototypeNext:
+    case Builtins::kMapIteratorPrototypeNext:
+    case Builtins::kSetIteratorPrototypeNext:
       return Type::OtherObject();
-    case BuiltinFunctionId::kTypedArrayToStringTag:
+    case Builtins::kTypedArrayPrototypeToStringTag:
       return Type::Union(Type::InternalizedString(), Type::Undefined(),
                          t->zone());
 
     // Array functions.
-    case BuiltinFunctionId::kArrayIsArray:
+    case Builtins::kArrayIsArray:
       return Type::Boolean();
-    case BuiltinFunctionId::kArrayConcat:
+    case Builtins::kArrayConcat:
       return Type::Receiver();
-    case BuiltinFunctionId::kArrayEvery:
+    case Builtins::kArrayEvery:
       return Type::Boolean();
-    case BuiltinFunctionId::kArrayFill:
-    case BuiltinFunctionId::kArrayFilter:
+    case Builtins::kArrayPrototypeFill:
+    case Builtins::kArrayFilter:
       return Type::Receiver();
-    case BuiltinFunctionId::kArrayFindIndex:
+    case Builtins::kArrayPrototypeFindIndex:
       return Type::Range(-1, kMaxSafeInteger, t->zone());
-    case BuiltinFunctionId::kArrayForEach:
+    case Builtins::kArrayForEach:
       return Type::Undefined();
-    case BuiltinFunctionId::kArrayIncludes:
+    case Builtins::kArrayIncludes:
       return Type::Boolean();
-    case BuiltinFunctionId::kArrayIndexOf:
+    case Builtins::kArrayIndexOf:
       return Type::Range(-1, kMaxSafeInteger, t->zone());
-    case BuiltinFunctionId::kArrayJoin:
+    case Builtins::kArrayPrototypeJoin:
       return Type::String();
-    case BuiltinFunctionId::kArrayLastIndexOf:
+    case Builtins::kArrayPrototypeLastIndexOf:
       return Type::Range(-1, kMaxSafeInteger, t->zone());
-    case BuiltinFunctionId::kArrayMap:
+    case Builtins::kArrayMap:
       return Type::Receiver();
-    case BuiltinFunctionId::kArrayPush:
-      return t->cache_.kPositiveSafeInteger;
-    case BuiltinFunctionId::kArrayReverse:
-    case BuiltinFunctionId::kArraySlice:
+    case Builtins::kArrayPush:
+      return t->cache_->kPositiveSafeInteger;
+    case Builtins::kArrayPrototypeReverse:
+    case Builtins::kArrayPrototypeSlice:
       return Type::Receiver();
-    case BuiltinFunctionId::kArraySome:
+    case Builtins::kArraySome:
       return Type::Boolean();
-    case BuiltinFunctionId::kArraySplice:
+    case Builtins::kArrayPrototypeSplice:
       return Type::Receiver();
-    case BuiltinFunctionId::kArrayUnshift:
-      return t->cache_.kPositiveSafeInteger;
+    case Builtins::kArrayUnshift:
+      return t->cache_->kPositiveSafeInteger;
 
     // ArrayBuffer functions.
-    case BuiltinFunctionId::kArrayBufferIsView:
+    case Builtins::kArrayBufferIsView:
       return Type::Boolean();
 
     // Object functions.
-    case BuiltinFunctionId::kObjectAssign:
+    case Builtins::kObjectAssign:
       return Type::Receiver();
-    case BuiltinFunctionId::kObjectCreate:
+    case Builtins::kObjectCreate:
       return Type::OtherObject();
-    case BuiltinFunctionId::kObjectIs:
-    case BuiltinFunctionId::kObjectHasOwnProperty:
-    case BuiltinFunctionId::kObjectIsPrototypeOf:
+    case Builtins::kObjectIs:
+    case Builtins::kObjectPrototypeHasOwnProperty:
+    case Builtins::kObjectPrototypeIsPrototypeOf:
       return Type::Boolean();
-    case BuiltinFunctionId::kObjectToString:
+    case Builtins::kObjectToString:
       return Type::String();
 
-    case BuiltinFunctionId::kPromiseAll:
+    case Builtins::kPromiseAll:
       return Type::Receiver();
-    case BuiltinFunctionId::kPromisePrototypeCatch:
+    case Builtins::kPromisePrototypeThen:
       return Type::Receiver();
-    case BuiltinFunctionId::kPromisePrototypeFinally:
+    case Builtins::kPromiseRace:
       return Type::Receiver();
-    case BuiltinFunctionId::kPromisePrototypeThen:
+    case Builtins::kPromiseReject:
       return Type::Receiver();
-    case BuiltinFunctionId::kPromiseRace:
-      return Type::Receiver();
-    case BuiltinFunctionId::kPromiseReject:
-      return Type::Receiver();
-    case BuiltinFunctionId::kPromiseResolve:
+    case Builtins::kPromiseResolveTrampoline:
       return Type::Receiver();
 
     // RegExp functions.
-    case BuiltinFunctionId::kRegExpCompile:
+    case Builtins::kRegExpPrototypeCompile:
       return Type::OtherObject();
-    case BuiltinFunctionId::kRegExpExec:
+    case Builtins::kRegExpPrototypeExec:
       return Type::Union(Type::Array(), Type::Null(), t->zone());
-    case BuiltinFunctionId::kRegExpTest:
+    case Builtins::kRegExpPrototypeTest:
       return Type::Boolean();
-    case BuiltinFunctionId::kRegExpToString:
+    case Builtins::kRegExpPrototypeToString:
       return Type::String();
 
     // Function functions.
-    case BuiltinFunctionId::kFunctionBind:
+    case Builtins::kFunctionPrototypeBind:
       return Type::BoundFunction();
-    case BuiltinFunctionId::kFunctionHasInstance:
+    case Builtins::kFunctionPrototypeHasInstance:
       return Type::Boolean();
 
     // Global functions.
-    case BuiltinFunctionId::kGlobalDecodeURI:
-    case BuiltinFunctionId::kGlobalDecodeURIComponent:
-    case BuiltinFunctionId::kGlobalEncodeURI:
-    case BuiltinFunctionId::kGlobalEncodeURIComponent:
-    case BuiltinFunctionId::kGlobalEscape:
-    case BuiltinFunctionId::kGlobalUnescape:
+    case Builtins::kGlobalDecodeURI:
+    case Builtins::kGlobalDecodeURIComponent:
+    case Builtins::kGlobalEncodeURI:
+    case Builtins::kGlobalEncodeURIComponent:
+    case Builtins::kGlobalEscape:
+    case Builtins::kGlobalUnescape:
       return Type::String();
-    case BuiltinFunctionId::kGlobalIsFinite:
-    case BuiltinFunctionId::kGlobalIsNaN:
+    case Builtins::kGlobalIsFinite:
+    case Builtins::kGlobalIsNaN:
       return Type::Boolean();
 
     // Map functions.
-    case BuiltinFunctionId::kMapClear:
-    case BuiltinFunctionId::kMapForEach:
+    case Builtins::kMapPrototypeClear:
+    case Builtins::kMapPrototypeForEach:
       return Type::Undefined();
-    case BuiltinFunctionId::kMapDelete:
-    case BuiltinFunctionId::kMapHas:
+    case Builtins::kMapPrototypeDelete:
+    case Builtins::kMapPrototypeHas:
       return Type::Boolean();
-    case BuiltinFunctionId::kMapEntries:
-    case BuiltinFunctionId::kMapKeys:
-    case BuiltinFunctionId::kMapSet:
-    case BuiltinFunctionId::kMapValues:
+    case Builtins::kMapPrototypeEntries:
+    case Builtins::kMapPrototypeKeys:
+    case Builtins::kMapPrototypeSet:
+    case Builtins::kMapPrototypeValues:
       return Type::OtherObject();
 
     // Set functions.
-    case BuiltinFunctionId::kSetAdd:
-    case BuiltinFunctionId::kSetEntries:
-    case BuiltinFunctionId::kSetValues:
+    case Builtins::kSetPrototypeAdd:
+    case Builtins::kSetPrototypeEntries:
+    case Builtins::kSetPrototypeValues:
       return Type::OtherObject();
-    case BuiltinFunctionId::kSetClear:
-    case BuiltinFunctionId::kSetForEach:
+    case Builtins::kSetPrototypeClear:
+    case Builtins::kSetPrototypeForEach:
       return Type::Undefined();
-    case BuiltinFunctionId::kSetDelete:
-    case BuiltinFunctionId::kSetHas:
+    case Builtins::kSetPrototypeDelete:
+    case Builtins::kSetPrototypeHas:
       return Type::Boolean();
 
     // WeakMap functions.
-    case BuiltinFunctionId::kWeakMapDelete:
-    case BuiltinFunctionId::kWeakMapHas:
+    case Builtins::kWeakMapPrototypeDelete:
+    case Builtins::kWeakMapPrototypeHas:
       return Type::Boolean();
-    case BuiltinFunctionId::kWeakMapSet:
+    case Builtins::kWeakMapPrototypeSet:
       return Type::OtherObject();
 
     // WeakSet functions.
-    case BuiltinFunctionId::kWeakSetAdd:
+    case Builtins::kWeakSetPrototypeAdd:
       return Type::OtherObject();
-    case BuiltinFunctionId::kWeakSetDelete:
-    case BuiltinFunctionId::kWeakSetHas:
+    case Builtins::kWeakSetPrototypeDelete:
+    case Builtins::kWeakSetPrototypeHas:
       return Type::Boolean();
     default:
       return Type::NonInternal();
@@ -1737,7 +1816,6 @@ Type Typer::Visitor::TypeJSCallRuntime(Node* node) {
     case Runtime::kInlineIsSmi:
       return TypeUnaryOp(node, ObjectIsSmi);
     case Runtime::kInlineIsArray:
-    case Runtime::kInlineIsTypedArray:
     case Runtime::kInlineIsRegExp:
       return Type::Boolean();
     case Runtime::kInlineCreateIterResultObject:
@@ -1770,11 +1848,11 @@ Type Typer::Visitor::TypeJSForInNext(Node* node) {
 }
 
 Type Typer::Visitor::TypeJSForInPrepare(Node* node) {
-  STATIC_ASSERT(Map::EnumLengthBits::kMax <= FixedArray::kMaxLength);
+  STATIC_ASSERT(Map::Bits3::EnumLengthBits::kMax <= FixedArray::kMaxLength);
   Type const cache_type =
       Type::Union(Type::SignedSmall(), Type::OtherInternal(), zone());
   Type const cache_array = Type::OtherInternal();
-  Type const cache_length = typer_->cache_.kFixedArrayLengthType;
+  Type const cache_length = typer_->cache_->kFixedArrayLengthType;
   return Type::Tuple(cache_type, cache_array, cache_length, zone());
 }
 
@@ -1785,6 +1863,8 @@ Type Typer::Visitor::TypeJSStoreMessage(Node* node) { UNREACHABLE(); }
 Type Typer::Visitor::TypeJSLoadModule(Node* node) { return Type::Any(); }
 
 Type Typer::Visitor::TypeJSStoreModule(Node* node) { UNREACHABLE(); }
+
+Type Typer::Visitor::TypeJSGetImportMeta(Node* node) { return Type::Any(); }
 
 Type Typer::Visitor::TypeJSGeneratorStore(Node* node) { UNREACHABLE(); }
 
@@ -1920,9 +2000,20 @@ Type Typer::Visitor::SameValueTyper(Type lhs, Type rhs, Typer* t) {
   return t->operation_typer()->SameValue(lhs, rhs);
 }
 
+// static
+Type Typer::Visitor::SameValueNumbersOnlyTyper(Type lhs, Type rhs, Typer* t) {
+  return t->operation_typer()->SameValueNumbersOnly(lhs, rhs);
+}
+
 Type Typer::Visitor::TypeSameValue(Node* node) {
   return TypeBinaryOp(node, SameValueTyper);
 }
+
+Type Typer::Visitor::TypeSameValueNumbersOnly(Node* node) {
+  return TypeBinaryOp(node, SameValueNumbersOnlyTyper);
+}
+
+Type Typer::Visitor::TypeNumberSameValue(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeStringEqual(Node* node) { return Type::Boolean(); }
 
@@ -1949,7 +2040,7 @@ Type Typer::Visitor::TypeStringToUpperCaseIntl(Node* node) {
 }
 
 Type Typer::Visitor::TypeStringCharCodeAt(Node* node) {
-  return typer_->cache_.kUint16;
+  return typer_->cache_->kUint16;
 }
 
 Type Typer::Visitor::TypeStringCodePointAt(Node* node) {
@@ -1964,18 +2055,22 @@ Type Typer::Visitor::TypeStringFromSingleCodePoint(Node* node) {
   return TypeUnaryOp(node, StringFromSingleCodePointTyper);
 }
 
+Type Typer::Visitor::TypeStringFromCodePointAt(Node* node) {
+  return Type::String();
+}
+
 Type Typer::Visitor::TypeStringIndexOf(Node* node) {
   return Type::Range(-1.0, String::kMaxLength, zone());
 }
 
 Type Typer::Visitor::TypeStringLength(Node* node) {
-  return typer_->cache_.kStringLengthType;
+  return typer_->cache_->kStringLengthType;
 }
 
 Type Typer::Visitor::TypeStringSubstring(Node* node) { return Type::String(); }
 
 Type Typer::Visitor::TypePoisonIndex(Node* node) {
-  return Type::Union(Operand(node, 0), typer_->cache_.kSingletonZero, zone());
+  return Type::Union(Operand(node, 0), typer_->cache_->kSingletonZero, zone());
 }
 
 Type Typer::Visitor::TypeCheckBounds(Node* node) {
@@ -1996,6 +2091,7 @@ Type Typer::Visitor::TypeCheckInternalizedString(Node* node) {
 }
 
 Type Typer::Visitor::TypeCheckMaps(Node* node) { UNREACHABLE(); }
+Type Typer::Visitor::TypeDynamicCheckMaps(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeCompareMaps(Node* node) { return Type::Boolean(); }
 
@@ -2038,6 +2134,8 @@ Type Typer::Visitor::TypeCheckNotTaggedHole(Node* node) {
   return type;
 }
 
+Type Typer::Visitor::TypeCheckClosure(Node* node) { return Type::Function(); }
+
 Type Typer::Visitor::TypeConvertReceiver(Node* node) {
   Type arg = Operand(node, 0);
   return typer_->operation_typer_.ConvertReceiver(arg);
@@ -2068,15 +2166,23 @@ Type Typer::Visitor::TypeLoadField(Node* node) {
   return FieldAccessOf(node->op()).type;
 }
 
+Type Typer::Visitor::TypeLoadMessage(Node* node) { return Type::Any(); }
+
 Type Typer::Visitor::TypeLoadElement(Node* node) {
   return ElementAccessOf(node->op()).type;
 }
+
+Type Typer::Visitor::TypeLoadStackArgument(Node* node) {
+  return Type::NonInternal();
+}
+
+Type Typer::Visitor::TypeLoadFromObject(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeLoadTypedElement(Node* node) {
   switch (ExternalArrayTypeOf(node->op())) {
 #define TYPED_ARRAY_CASE(ElemType, type, TYPE, ctype) \
   case kExternal##ElemType##Array:                    \
-    return typer_->cache_.k##ElemType;
+    return typer_->cache_->k##ElemType;
     TYPED_ARRAYS(TYPED_ARRAY_CASE)
 #undef TYPED_ARRAY_CASE
   }
@@ -2087,7 +2193,7 @@ Type Typer::Visitor::TypeLoadDataViewElement(Node* node) {
   switch (ExternalArrayTypeOf(node->op())) {
 #define TYPED_ARRAY_CASE(ElemType, type, TYPE, ctype) \
   case kExternal##ElemType##Array:                    \
-    return typer_->cache_.k##ElemType;
+    return typer_->cache_->k##ElemType;
     TYPED_ARRAYS(TYPED_ARRAY_CASE)
 #undef TYPED_ARRAY_CASE
   }
@@ -2096,7 +2202,11 @@ Type Typer::Visitor::TypeLoadDataViewElement(Node* node) {
 
 Type Typer::Visitor::TypeStoreField(Node* node) { UNREACHABLE(); }
 
+Type Typer::Visitor::TypeStoreMessage(Node* node) { UNREACHABLE(); }
+
 Type Typer::Visitor::TypeStoreElement(Node* node) { UNREACHABLE(); }
+
+Type Typer::Visitor::TypeStoreToObject(Node* node) { UNREACHABLE(); }
 
 Type Typer::Visitor::TypeTransitionAndStoreElement(Node* node) {
   UNREACHABLE();
@@ -2138,6 +2248,10 @@ Type Typer::Visitor::TypeObjectIsDetectableCallable(Node* node) {
 
 Type Typer::Visitor::TypeObjectIsMinusZero(Node* node) {
   return TypeUnaryOp(node, ObjectIsMinusZero);
+}
+
+Type Typer::Visitor::TypeNumberIsMinusZero(Node* node) {
+  return TypeUnaryOp(node, NumberIsMinusZero);
 }
 
 Type Typer::Visitor::TypeNumberIsFloat64Hole(Node* node) {
@@ -2197,7 +2311,11 @@ Type Typer::Visitor::TypeObjectIsUndetectable(Node* node) {
 }
 
 Type Typer::Visitor::TypeArgumentsLength(Node* node) {
-  return TypeCache::Get().kArgumentsLengthType;
+  return TypeCache::Get()->kArgumentsLengthType;
+}
+
+Type Typer::Visitor::TypeRestLength(Node* node) {
+  return TypeCache::Get()->kArgumentsLengthType;
 }
 
 Type Typer::Visitor::TypeArgumentsFrame(Node* node) {
@@ -2232,11 +2350,15 @@ Type Typer::Visitor::TypeFindOrderedHashMapEntryForInt32Key(Node* node) {
 
 Type Typer::Visitor::TypeRuntimeAbort(Node* node) { UNREACHABLE(); }
 
+Type Typer::Visitor::TypeAssertType(Node* node) { UNREACHABLE(); }
+
 // Heap constants.
 
 Type Typer::Visitor::TypeConstant(Handle<Object> value) {
-  return Type::NewConstant(typer_->broker(), value, zone());
+  return Type::Constant(typer_->broker(), value, zone());
 }
+
+Type Typer::Visitor::TypeJSGetIterator(Node* node) { return Type::Any(); }
 
 }  // namespace compiler
 }  // namespace internal

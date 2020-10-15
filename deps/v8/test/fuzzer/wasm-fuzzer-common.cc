@@ -4,10 +4,14 @@
 
 #include "test/fuzzer/wasm-fuzzer-common.h"
 
+#include <ctime>
+
 #include "include/v8.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
+#include "src/execution/isolate.h"
+#include "src/objects/objects-inl.h"
+#include "src/utils/ostreams.h"
 #include "src/wasm/wasm-engine.h"
+#include "src/wasm/wasm-feature-flags.h"
 #include "src/wasm/wasm-module-builder.h"
 #include "src/wasm/wasm-module.h"
 #include "src/wasm/wasm-objects-inl.h"
@@ -22,88 +26,79 @@ namespace internal {
 namespace wasm {
 namespace fuzzer {
 
-static constexpr const char* kNameString = "name";
-static constexpr size_t kNameStringLength = 4;
-
-int FuzzWasmSection(SectionCode section, const uint8_t* data, size_t size) {
-  v8_fuzzer::FuzzerSupport* support = v8_fuzzer::FuzzerSupport::Get();
-  v8::Isolate* isolate = support->GetIsolate();
-  i::Isolate* i_isolate = reinterpret_cast<Isolate*>(isolate);
-
-  // Clear any pending exceptions from a prior run.
-  i_isolate->clear_pending_exception();
-
-  v8::Isolate::Scope isolate_scope(isolate);
-  v8::HandleScope handle_scope(isolate);
-  v8::Context::Scope context_scope(support->GetContext());
-  v8::TryCatch try_catch(isolate);
-
-  AccountingAllocator allocator;
-  Zone zone(&allocator, ZONE_NAME);
-
-  ZoneBuffer buffer(&zone);
-  buffer.write_u32(kWasmMagic);
-  buffer.write_u32(kWasmVersion);
-  if (section == kNameSectionCode) {
-    buffer.write_u8(kUnknownSectionCode);
-    buffer.write_size(size + kNameStringLength + 1);
-    buffer.write_u8(kNameStringLength);
-    buffer.write(reinterpret_cast<const uint8_t*>(kNameString),
-                 kNameStringLength);
-    buffer.write(data, size);
-  } else {
-    buffer.write_u8(section);
-    buffer.write_size(size);
-    buffer.write(data, size);
-  }
-
-  ErrorThrower thrower(i_isolate, "decoder");
-
-  testing::DecodeWasmModuleForTesting(i_isolate, &thrower, buffer.begin(),
-                                      buffer.end(), kWasmOrigin);
-
-  return 0;
-}
-
 void InterpretAndExecuteModule(i::Isolate* isolate,
                                Handle<WasmModuleObject> module_object) {
   // We do not instantiate the module if there is a start function, because a
   // start function can contain an infinite loop which we cannot handle.
   if (module_object->module()->start_function_index >= 0) return;
 
-  ErrorThrower thrower(isolate, "WebAssembly Instantiation");
-  MaybeHandle<WasmInstanceObject> maybe_instance;
+  HandleScope handle_scope(isolate);  // Avoid leaking handles.
   Handle<WasmInstanceObject> instance;
 
-  // Try to instantiate and interpret the module_object.
-  maybe_instance = isolate->wasm_engine()->SyncInstantiate(
-      isolate, &thrower, module_object,
-      Handle<JSReceiver>::null(),     // imports
-      MaybeHandle<JSArrayBuffer>());  // memory
-  if (!maybe_instance.ToHandle(&instance)) {
-    isolate->clear_pending_exception();
-    thrower.Reset();  // Ignore errors.
-    return;
+  // Try to instantiate, return if it fails.
+  {
+    ErrorThrower thrower(isolate, "WebAssembly Instantiation");
+    if (!isolate->wasm_engine()
+             ->SyncInstantiate(isolate, &thrower, module_object, {},
+                               {})  // no imports & memory
+             .ToHandle(&instance)) {
+      isolate->clear_pending_exception();
+      thrower.Reset();  // Ignore errors.
+      return;
+    }
   }
-  if (!testing::InterpretWasmModuleForTesting(isolate, instance, "main", 0,
-                                              nullptr)) {
-    isolate->clear_pending_exception();
+
+  // Get the "main" exported function. Do nothing if it does not exist.
+  Handle<WasmExportedFunction> main_function;
+  if (!testing::GetExportedFunction(isolate, instance, "main")
+           .ToHandle(&main_function)) {
     return;
   }
 
+  OwnedVector<WasmValue> arguments =
+      testing::MakeDefaultInterpreterArguments(isolate, main_function->sig());
+
+  // Now interpret.
+  testing::WasmInterpretationResult interpreter_result =
+      testing::InterpretWasmModule(isolate, instance,
+                                   main_function->function_index(),
+                                   arguments.begin());
+  if (interpreter_result.failed()) return;
+
+  // The WebAssembly spec allows the sign bit of NaN to be non-deterministic.
+  // This sign bit can make the difference between an infinite loop and
+  // terminating code. With possible non-determinism we cannot guarantee that
+  // the generated code will not go into an infinite loop and cause a timeout in
+  // Clusterfuzz. Therefore we do not execute the generated code if the result
+  // may be non-deterministic.
+  if (interpreter_result.possible_nondeterminism()) return;
+
   // Try to instantiate and execute the module_object.
-  maybe_instance = isolate->wasm_engine()->SyncInstantiate(
-      isolate, &thrower, module_object,
-      Handle<JSReceiver>::null(),     // imports
-      MaybeHandle<JSArrayBuffer>());  // memory
-  if (!maybe_instance.ToHandle(&instance)) {
-    isolate->clear_pending_exception();
-    thrower.Reset();  // Ignore errors.
-    return;
+  {
+    ErrorThrower thrower(isolate, "Second Instantiation");
+    // We instantiated before, so the second instantiation must also succeed:
+    CHECK(isolate->wasm_engine()
+              ->SyncInstantiate(isolate, &thrower, module_object, {},
+                                {})  // no imports & memory
+              .ToHandle(&instance));
   }
-  if (testing::RunWasmModuleForTesting(isolate, instance, 0, nullptr) < 0) {
-    isolate->clear_pending_exception();
-    return;
+
+  OwnedVector<Handle<Object>> compiled_args =
+      testing::MakeDefaultArguments(isolate, main_function->sig());
+
+  bool exception = false;
+  int32_t result_compiled = testing::CallWasmFunctionForTesting(
+      isolate, instance, "main", static_cast<int>(compiled_args.size()),
+      compiled_args.begin(), &exception);
+  if (interpreter_result.trapped() != exception) {
+    const char* exception_text[] = {"no exception", "exception"};
+    FATAL("interpreter: %s; compiled: %s",
+          exception_text[interpreter_result.trapped()],
+          exception_text[exception]);
+  }
+
+  if (interpreter_result.finished()) {
+    CHECK_EQ(interpreter_result.result(), result_compiled);
   }
 }
 
@@ -119,15 +114,28 @@ PrintSig PrintReturns(const FunctionSig* sig) {
   return {sig->return_count(), [=](size_t i) { return sig->GetReturn(i); }};
 }
 const char* ValueTypeToConstantName(ValueType type) {
-  switch (type) {
-    case kWasmI32:
+  switch (type.kind()) {
+    case ValueType::kI32:
       return "kWasmI32";
-    case kWasmI64:
+    case ValueType::kI64:
       return "kWasmI64";
-    case kWasmF32:
+    case ValueType::kF32:
       return "kWasmF32";
-    case kWasmF64:
+    case ValueType::kF64:
       return "kWasmF64";
+    case ValueType::kS128:
+      return "kWasmS128";
+    case ValueType::kOptRef:
+      switch (type.heap_representation()) {
+        case HeapType::kExtern:
+          return "kWasmExternRef";
+        case HeapType::kFunc:
+          return "kWasmFuncRef";
+        case HeapType::kExn:
+          return "kWasmExnRef";
+        default:
+          UNREACHABLE();
+      }
     default:
       UNREACHABLE();
   }
@@ -146,36 +154,49 @@ struct PrintName {
       : name(wire_bytes.GetNameOrNull(ref)) {}
 };
 std::ostream& operator<<(std::ostream& os, const PrintName& name) {
-  return os.write(name.name.start(), name.name.size());
+  return os.write(name.name.begin(), name.name.size());
 }
 }  // namespace
 
 void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
                       bool compiles) {
   constexpr bool kVerifyFunctions = false;
-  auto enabled_features = i::wasm::WasmFeaturesFromIsolate(isolate);
+  auto enabled_features = i::wasm::WasmFeatures::FromIsolate(isolate);
   ModuleResult module_res = DecodeWasmModule(
       enabled_features, wire_bytes.start(), wire_bytes.end(), kVerifyFunctions,
-      ModuleOrigin::kWasmOrigin, isolate->counters(), isolate->allocator());
+      ModuleOrigin::kWasmOrigin, isolate->counters(),
+      isolate->metrics_recorder(), v8::metrics::Recorder::ContextId::Empty(),
+      DecodingMethod::kSync, isolate->wasm_engine()->allocator());
   CHECK(module_res.ok());
   WasmModule* module = module_res.value().get();
   CHECK_NOT_NULL(module);
 
   StdoutStream os;
 
-  os << "// Copyright 2018 the V8 project authors. All rights reserved.\n"
+  tzset();
+  time_t current_time = time(nullptr);
+  struct tm current_localtime;
+#ifdef V8_OS_WIN
+  localtime_s(&current_localtime, &current_time);
+#else
+  localtime_r(&current_time, &current_localtime);
+#endif
+  int year = 1900 + current_localtime.tm_year;
+
+  os << "// Copyright " << year
+     << " the V8 project authors. All rights reserved.\n"
         "// Use of this source code is governed by a BSD-style license that "
         "can be\n"
         "// found in the LICENSE file.\n"
         "\n"
-        "load('test/mjsunit/wasm/wasm-constants.js');\n"
+        "// Flags: --wasm-staging\n"
+        "\n"
         "load('test/mjsunit/wasm/wasm-module-builder.js');\n"
         "\n"
-        "(function() {\n"
-        "  const builder = new WasmModuleBuilder();\n";
+        "const builder = new WasmModuleBuilder();\n";
 
   if (module->has_memory) {
-    os << "  builder.addMemory(" << module->initial_pages;
+    os << "builder.addMemory(" << module->initial_pages;
     if (module->has_maximum_pages) {
       os << ", " << module->maximum_pages;
     } else {
@@ -183,78 +204,131 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
     }
     os << ", " << (module->mem_export ? "true" : "false");
     if (module->has_shared_memory) {
-      os << ", shared";
+      os << ", true";
     }
     os << ");\n";
   }
 
   for (WasmGlobal& glob : module->globals) {
-    os << "  builder.addGlobal(" << ValueTypeToConstantName(glob.type) << ", "
+    os << "builder.addGlobal(" << ValueTypeToConstantName(glob.type) << ", "
        << glob.mutability << ");\n";
+  }
+
+  // TODO(7748): Support array/struct types.
+#if DEBUG
+  for (uint8_t kind : module->type_kinds) {
+    DCHECK_EQ(kWasmFunctionTypeCode, kind);
+  }
+#endif
+  for (TypeDefinition type : module->types) {
+    const FunctionSig* sig = type.function_sig;
+    os << "builder.addType(makeSig(" << PrintParameters(sig) << ", "
+       << PrintReturns(sig) << "));\n";
   }
 
   Zone tmp_zone(isolate->allocator(), ZONE_NAME);
 
+  // There currently cannot be more than one table.
+  DCHECK_GE(1, module->tables.size());
+  for (const WasmTable& table : module->tables) {
+    os << "builder.setTableBounds(" << table.initial_size << ", ";
+    if (table.has_maximum_size) {
+      os << table.maximum_size << ");\n";
+    } else {
+      os << "undefined);\n";
+    }
+  }
+  for (const WasmElemSegment& elem_segment : module->elem_segments) {
+    os << "builder.addElementSegment(";
+    os << elem_segment.table_index << ", ";
+    switch (elem_segment.offset.kind()) {
+      case WasmInitExpr::kGlobalGet:
+        os << elem_segment.offset.immediate().index << ", true";
+        break;
+      case WasmInitExpr::kI32Const:
+        os << elem_segment.offset.immediate().i32_const << ", false";
+        break;
+      default:
+        UNREACHABLE();
+    }
+    os << ", " << PrintCollection(elem_segment.entries) << ");\n";
+  }
+
   for (const WasmFunction& func : module->functions) {
     Vector<const uint8_t> func_code = wire_bytes.GetFunctionBytes(&func);
-    os << "  // Generate function " << (func.func_index + 1) << " (out of "
+    os << "// Generate function " << (func.func_index + 1) << " (out of "
        << module->functions.size() << ").\n";
-    // Generate signature.
-    os << "  sig" << (func.func_index + 1) << " = makeSig("
-       << PrintParameters(func.sig) << ", " << PrintReturns(func.sig) << ");\n";
 
     // Add function.
-    os << "  builder.addFunction(undefined, sig" << (func.func_index + 1)
-       << ")\n";
+    os << "builder.addFunction(undefined, " << func.sig_index
+       << " /* sig */)\n";
 
     // Add locals.
     BodyLocalDecls decls(&tmp_zone);
-    DecodeLocalDecls(enabled_features, &decls, func_code.start(),
+    DecodeLocalDecls(enabled_features, &decls, func_code.begin(),
                      func_code.end());
     if (!decls.type_list.empty()) {
-      os << "    ";
+      os << "  ";
       for (size_t pos = 0, count = 1, locals = decls.type_list.size();
            pos < locals; pos += count, count = 1) {
         ValueType type = decls.type_list[pos];
-        while (pos + count < locals && decls.type_list[pos + count] == type)
+        while (pos + count < locals && decls.type_list[pos + count] == type) {
           ++count;
-        os << ".addLocals({" << ValueTypes::TypeName(type)
-           << "_count: " << count << "})";
+        }
+        os << ".addLocals(" << ValueTypeToConstantName(type) << ", " << count
+           << ")";
       }
       os << "\n";
     }
 
     // Add body.
-    os << "    .addBodyWithEnd([\n";
+    os << "  .addBodyWithEnd([\n";
 
-    FunctionBody func_body(func.sig, func.code.offset(), func_code.start(),
+    FunctionBody func_body(func.sig, func.code.offset(), func_code.begin(),
                            func_code.end());
     PrintRawWasmCode(isolate->allocator(), func_body, module, kOmitLocals);
-    os << "            ]);\n";
+    os << "]);\n";
   }
 
   for (WasmExport& exp : module->export_table) {
     if (exp.kind != kExternalFunction) continue;
-    os << "  builder.addExport('" << PrintName(wire_bytes, exp.name) << "', "
+    os << "builder.addExport('" << PrintName(wire_bytes, exp.name) << "', "
        << exp.index << ");\n";
   }
 
   if (compiles) {
-    os << "  const instance = builder.instantiate();\n"
-          "  print(instance.exports.main(1, 2, 3));\n";
+    os << "const instance = builder.instantiate();\n"
+          "print(instance.exports.main(1, 2, 3));\n";
   } else {
-    os << "  assertThrows(function() { builder.instantiate(); }, "
+    os << "assertThrows(function() { builder.instantiate(); }, "
           "WebAssembly.CompileError);\n";
   }
-  os << "})();\n";
 }
 
-int WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
-                                        bool require_valid) {
+void OneTimeEnableStagedWasmFeatures() {
+  struct EnableStagedWasmFeatures {
+    EnableStagedWasmFeatures() {
+#define ENABLE_STAGED_FEATURES(feat, desc, val) \
+  FLAG_experimental_wasm_##feat = true;
+      FOREACH_WASM_STAGING_FEATURE_FLAG(ENABLE_STAGED_FEATURES)
+#undef ENABLE_STAGED_FEATURES
+    }
+  };
+  // The compiler will properly synchronize the constructor call.
+  static EnableStagedWasmFeatures one_time_enable_staged_features;
+}
+
+void WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
+                                         bool require_valid) {
+  // We explicitly enable staged WebAssembly features here to increase fuzzer
+  // coverage. For libfuzzer fuzzers it is not possible that the fuzzer enables
+  // the flag by itself.
+  OneTimeEnableStagedWasmFeatures();
+
   // Strictly enforce the input size limit. Note that setting "max_len" on the
   // fuzzer target is not enough, since different fuzzers are used and not all
   // respect that limit.
-  if (data.size() > max_input_size()) return 0;
+  if (data.size() > max_input_size()) return;
 
   v8_fuzzer::FuzzerSupport* support = v8_fuzzer::FuzzerSupport::Get();
   v8::Isolate* isolate = support->GetIsolate();
@@ -278,11 +352,11 @@ int WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
   std::unique_ptr<Handle<Object>[]> compiler_args;
   // The first byte builds the bitmask to control which function will be
   // compiled with Turbofan and which one with Liftoff.
-  uint8_t tier_mask = data.is_empty() ? 0 : data[0];
-  if (!data.is_empty()) data += 1;
-  if (!GenerateModule(i_isolate, &zone, data, buffer, num_args,
-                      interpreter_args, compiler_args)) {
-    return 0;
+  uint8_t tier_mask = data.empty() ? 0 : data[0];
+  if (!data.empty()) data += 1;
+  if (!GenerateModule(i_isolate, &zone, data, &buffer, &num_args,
+                      &interpreter_args, &compiler_args)) {
+    return;
   }
 
   testing::SetupIsolateForWasmModule(i_isolate);
@@ -290,8 +364,7 @@ int WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
   ErrorThrower interpreter_thrower(i_isolate, "Interpreter");
   ModuleWireBytes wire_bytes(buffer.begin(), buffer.end());
 
-  // Compile with Turbofan here. Liftoff will be tested later.
-  auto enabled_features = i::wasm::WasmFeaturesFromIsolate(i_isolate);
+  auto enabled_features = i::wasm::WasmFeatures::FromIsolate(i_isolate);
   MaybeHandle<WasmModuleObject> compiled_module;
   {
     // Explicitly enable Liftoff, disable tiering and set the tier_mask. This
@@ -314,70 +387,9 @@ int WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
   CHECK_EQ(compiles, validates);
   CHECK_IMPLIES(require_valid, validates);
 
-  if (!compiles) return 0;
+  if (!compiles) return;
 
-  int32_t result_interpreter;
-  bool possible_nondeterminism = false;
-  {
-    MaybeHandle<WasmInstanceObject> interpreter_instance =
-        i_isolate->wasm_engine()->SyncInstantiate(
-            i_isolate, &interpreter_thrower, compiled_module.ToHandleChecked(),
-            MaybeHandle<JSReceiver>(), MaybeHandle<JSArrayBuffer>());
-
-    // Ignore instantiation failure.
-    if (interpreter_thrower.error()) {
-      return 0;
-    }
-
-    result_interpreter = testing::InterpretWasmModule(
-        i_isolate, interpreter_instance.ToHandleChecked(), &interpreter_thrower,
-        0, interpreter_args.get(), &possible_nondeterminism);
-  }
-
-  // Do not execute the generated code if the interpreter did not finished after
-  // a bounded number of steps.
-  if (interpreter_thrower.error()) {
-    return 0;
-  }
-
-  // The WebAssembly spec allows the sign bit of NaN to be non-deterministic.
-  // This sign bit can make the difference between an infinite loop and
-  // terminating code. With possible non-determinism we cannot guarantee that
-  // the generated code will not go into an infinite loop and cause a timeout in
-  // Clusterfuzz. Therefore we do not execute the generated code if the result
-  // may be non-deterministic.
-  if (possible_nondeterminism) {
-    return 0;
-  }
-
-  bool expect_exception =
-      result_interpreter == static_cast<int32_t>(0xDEADBEEF);
-
-  int32_t result_compiled;
-  {
-    ErrorThrower compiler_thrower(i_isolate, "Compile");
-    MaybeHandle<WasmInstanceObject> compiled_instance =
-        i_isolate->wasm_engine()->SyncInstantiate(
-            i_isolate, &compiler_thrower, compiled_module.ToHandleChecked(),
-            MaybeHandle<JSReceiver>(), MaybeHandle<JSArrayBuffer>());
-
-    DCHECK(!compiler_thrower.error());
-    result_compiled = testing::CallWasmFunctionForTesting(
-        i_isolate, compiled_instance.ToHandleChecked(), &compiler_thrower,
-        "main", num_args, compiler_args.get());
-  }
-
-  if (expect_exception != i_isolate->has_pending_exception()) {
-    const char* exception_text[] = {"no exception", "exception"};
-    FATAL("interpreter: %s; compiled: %s", exception_text[expect_exception],
-          exception_text[i_isolate->has_pending_exception()]);
-  }
-
-  if (!expect_exception) CHECK_EQ(result_interpreter, result_compiled);
-
-  // Cleanup any pending exception.
-  i_isolate->clear_pending_exception();
-  return 0;
+  InterpretAndExecuteModule(i_isolate, compiled_module.ToHandleChecked());
 }
 
 }  // namespace fuzzer

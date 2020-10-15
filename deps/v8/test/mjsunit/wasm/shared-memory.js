@@ -4,7 +4,6 @@
 
 // Flags: --experimental-wasm-threads
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 function assertMemoryIsValid(memory, shared) {
@@ -74,8 +73,8 @@ function assertMemoryIsValid(memory, shared) {
   let builder = new WasmModuleBuilder();
   builder.addFunction("main", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,
-      kExprGetLocal, 1,
+      kExprLocalGet, 0,
+      kExprLocalGet, 1,
       kAtomicPrefix,
       kExprI32AtomicAdd]);
   builder.addImportedMemory("m", "imported_mem");
@@ -120,8 +119,8 @@ function assertMemoryIsValid(memory, shared) {
   builder.addMemory(2, 10, false, "shared");
   builder.addFunction("main", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,
-      kExprGetLocal, 1,
+      kExprLocalGet, 0,
+      kExprLocalGet, 1,
       kAtomicPrefix,
       kExprI32AtomicAdd, 2, 0])
     .exportFunc();
@@ -129,4 +128,18 @@ function assertMemoryIsValid(memory, shared) {
   let instance = new WebAssembly.Instance(module);
   assertEquals(0, instance.exports.main(0, 0x11111111));
   assertEquals(0x11111111, instance.exports.main(0, 0x11111111));
+})();
+
+(function TestMemoryConstructorShouldNotCallHasProperty() {
+  print(arguments.callee.name);
+  // from test/wasm-js/data/test/js-api/memory/constructor.any.js
+  const proxy = new Proxy({}, {
+    has(o, x) {
+      throw new Error(`Should not call [[HasProperty]] with ${x}`);
+    },
+    get(o, x) {
+      return 0;
+    },
+  });
+  new WebAssembly.Memory(proxy);
 })();

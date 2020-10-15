@@ -14,9 +14,9 @@ namespace wasm {
 // Support for serializing WebAssembly {NativeModule} objects. This class takes
 // a snapshot of the module state at instantiation, and other code that modifies
 // the module after that won't affect the serialized result.
-class WasmSerializer {
+class V8_EXPORT_PRIVATE WasmSerializer {
  public:
-  WasmSerializer(Isolate* isolate, NativeModule* native_module);
+  explicit WasmSerializer(NativeModule* native_module);
 
   // Measure the required buffer size needed for serialization.
   size_t GetSerializedNativeModuleSize() const;
@@ -25,19 +25,34 @@ class WasmSerializer {
   // success and false if the given buffer it too small for serialization.
   bool SerializeNativeModule(Vector<byte> buffer) const;
 
+  // The data header consists of uint32_t-sized entries (see {WriteVersion}):
+  // [0] magic number
+  // [1] version hash
+  // [2] supported CPU features
+  // [3] flag hash
+  // ...  number of functions
+  // ... serialized functions
+  static constexpr size_t kMagicNumberOffset = 0;
+  static constexpr size_t kVersionHashOffset = kMagicNumberOffset + kUInt32Size;
+  static constexpr size_t kSupportedCPUFeaturesOffset =
+      kVersionHashOffset + kUInt32Size;
+  static constexpr size_t kFlagHashOffset =
+      kSupportedCPUFeaturesOffset + kUInt32Size;
+  static constexpr size_t kHeaderSize = 4 * kUInt32Size;
+
  private:
-  Isolate* isolate_;
   NativeModule* native_module_;
   std::vector<WasmCode*> code_table_;
 };
 
 // Support for deserializing WebAssembly {NativeModule} objects.
 // Checks the version header of the data against the current version.
-bool IsSupportedVersion(Isolate* isolate, Vector<const byte> data);
+bool IsSupportedVersion(Vector<const byte> data);
 
-// Deserializes the given data to create a compiled Wasm module.
-MaybeHandle<WasmModuleObject> DeserializeNativeModule(
-    Isolate* isolate, Vector<const byte> data, Vector<const byte> wire_bytes);
+// Deserializes the given data to create a Wasm module object.
+V8_EXPORT_PRIVATE MaybeHandle<WasmModuleObject> DeserializeNativeModule(
+    Isolate*, Vector<const byte> data, Vector<const byte> wire_bytes,
+    Vector<const char> source_url);
 
 }  // namespace wasm
 }  // namespace internal

@@ -126,13 +126,6 @@ test(function() {
   [].join(o);
 }, "Cannot convert object to primitive value", TypeError);
 
-// kCircularStructure
-test(function() {
-  var o = {};
-  o.o = o;
-  JSON.stringify(o);
-}, "Converting circular structure to JSON", TypeError);
-
 // kConstructorNotFunction
 test(function() {
   Map();
@@ -171,13 +164,13 @@ test(function() {
 for (constructor of typedArrayConstructors) {
   test(() => {
     const ta = new constructor([1]);
-    %ArrayBufferNeuter(ta.buffer);
+    %ArrayBufferDetach(ta.buffer);
     ta.find(() => {});
   }, "Cannot perform %TypedArray%.prototype.find on a detached ArrayBuffer", TypeError);
 
   test(() => {
     const ta = new constructor([1]);
-    %ArrayBufferNeuter(ta.buffer);
+    %ArrayBufferDetach(ta.buffer);
     ta.findIndex(() => {});
   }, "Cannot perform %TypedArray%.prototype.findIndex on a detached ArrayBuffer", TypeError);
 }

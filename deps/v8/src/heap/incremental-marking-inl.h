@@ -7,15 +7,15 @@
 
 #include "src/heap/incremental-marking.h"
 
+#include "src/execution/isolate.h"
 #include "src/heap/mark-compact-inl.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
 #include "src/objects/maybe-object.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
 
-void IncrementalMarking::TransferColor(HeapObject* from, HeapObject* to) {
+void IncrementalMarking::TransferColor(HeapObject from, HeapObject to) {
   if (atomic_marking_state()->IsBlack(to)) {
     DCHECK(black_allocation());
     return;
@@ -33,24 +33,12 @@ void IncrementalMarking::TransferColor(HeapObject* from, HeapObject* to) {
   }
 }
 
-void IncrementalMarking::RecordWrite(HeapObject* obj, ObjectSlot slot,
-                                     Object* value) {
-  DCHECK_IMPLIES(slot.address() != kNullAddress, !HasWeakHeapObjectTag(*slot));
-  DCHECK(!HasWeakHeapObjectTag(value));
-  if (IsMarking() && value->IsHeapObject()) {
-    RecordWriteSlow(obj, HeapObjectSlot(slot), HeapObject::cast(value));
+bool IncrementalMarking::WhiteToGreyAndPush(HeapObject obj) {
+  if (marking_state()->WhiteToGrey(obj)) {
+    local_marking_worklists()->Push(obj);
+    return true;
   }
-}
-
-void IncrementalMarking::RecordMaybeWeakWrite(HeapObject* obj,
-                                              MaybeObjectSlot slot,
-                                              MaybeObject value) {
-  // When writing a weak reference, treat it as strong for the purposes of the
-  // marking barrier.
-  HeapObject* heap_object;
-  if (IsMarking() && value->GetHeapObject(&heap_object)) {
-    RecordWriteSlow(obj, HeapObjectSlot(slot), heap_object);
-  }
+  return false;
 }
 
 void IncrementalMarking::RestartIfNotMarking() {

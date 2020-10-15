@@ -34,6 +34,10 @@ from ..outproc import base as outproc
 from ..local import command
 from ..local import statusfile
 from ..local import utils
+from ..local.variants import INCOMPATIBLE_FLAGS_PER_VARIANT
+from ..local.variants import INCOMPATIBLE_FLAGS_PER_BUILD_VARIABLE
+from ..local.variants import INCOMPATIBLE_FLAGS_PER_EXTRA_FLAG
+
 
 FLAGS_PATTERN = re.compile(r"//\s+Flags:(.*)")
 
@@ -46,12 +50,20 @@ LOAD_PATTERN = re.compile(
     r"(?:load|readbuffer|read)\((?:'|\")([^'\"]+)(?:'|\")\)")
 # Pattern to auto-detect files to push on Android for statements like:
 # import "path/to/file.js"
-MODULE_RESOURCES_PATTERN_1 = re.compile(
-    r"(?:import|export)(?:\(| )(?:'|\")([^'\"]+)(?:'|\")")
-# Pattern to auto-detect files to push on Android for statements like:
 # import foobar from "path/to/file.js"
-MODULE_RESOURCES_PATTERN_2 = re.compile(
-    r"(?:import|export).*from (?:'|\")([^'\"]+)(?:'|\")")
+# import {foo, bar} from "path/to/file.js"
+# import("module.mjs").catch()...
+MODULE_RESOURCES_PATTERN = re.compile(
+    r"(?:import|export)(?:[^'\"]*?from)?\s*\(?['\"]([^'\"]+)['\"]",
+    re.MULTILINE | re.DOTALL)
+
+TIMEOUT_LONG = "long"
+
+try:
+  cmp             # Python 2
+except NameError:
+  def cmp(x, y):  # Python 3
+    return (x > y) - (x < y)
 
 
 class TestCase(object):
@@ -76,8 +88,10 @@ class TestCase(object):
 
     # Outcomes
     self._statusfile_outcomes = None
-    self.expected_outcomes = None
+    self._expected_outcomes = None
+    self._checked_flag_contradictions = False
     self._statusfile_flags = None
+    self.expected_failure_reason = None
 
     self._prepare_outcomes()
 
@@ -108,7 +122,7 @@ class TestCase(object):
       outcomes = self.suite.statusfile.get_outcomes(self.name, self.variant)
       self._statusfile_outcomes = filter(not_flag, outcomes)
       self._statusfile_flags = filter(is_flag, outcomes)
-    self.expected_outcomes = (
+    self._expected_outcomes = (
       self._parse_status_file_outcomes(self._statusfile_outcomes))
 
   def _parse_status_file_outcomes(self, outcomes):
@@ -133,9 +147,64 @@ class TestCase(object):
       return outproc.OUTCOMES_FAIL
     return expected_outcomes or outproc.OUTCOMES_PASS
 
+  def allow_timeouts(self):
+    if self.expected_outcomes == outproc.OUTCOMES_PASS:
+      self._expected_outcomes = outproc.OUTCOMES_PASS_OR_TIMEOUT
+    elif self.expected_outcomes == outproc.OUTCOMES_FAIL:
+      self._expected_outcomes = outproc.OUTCOMES_FAIL_OR_TIMEOUT
+    elif statusfile.TIMEOUT not in self.expected_outcomes:
+      self._expected_outcomes = (
+          self.expected_outcomes + [statusfile.TIMEOUT])
+
+  @property
+  def expected_outcomes(self):
+    def normalize_flag(flag):
+      return flag.replace("_", "-").replace("--no-", "--no")
+
+    def has_flag(conflicting_flag, flags):
+      conflicting_flag = normalize_flag(conflicting_flag)
+      if conflicting_flag in flags:
+        return True
+      if conflicting_flag.endswith("*"):
+        return any(flag.startswith(conflicting_flag[:-1]) for flag in flags)
+      return False
+
+    def check_flags(incompatible_flags, actual_flags, rule):
+      for incompatible_flag in incompatible_flags:
+          if has_flag(incompatible_flag, actual_flags):
+            self._statusfile_outcomes = outproc.OUTCOMES_FAIL
+            self._expected_outcomes = outproc.OUTCOMES_FAIL
+            self.expected_failure_reason = ("Rule " + rule + " in " +
+                "tools/testrunner/local/variants.py expected a flag " +
+                "contradiction error with " + incompatible_flag + ".")
+
+    if not self._checked_flag_contradictions:
+      self._checked_flag_contradictions = True
+
+      file_specific_flags = (self._get_source_flags() + self._get_suite_flags()
+                             + self._get_statusfile_flags())
+      file_specific_flags = [normalize_flag(flag) for flag in file_specific_flags]
+      extra_flags = [normalize_flag(flag) for flag in self._get_extra_flags()]
+
+      if self.variant in INCOMPATIBLE_FLAGS_PER_VARIANT:
+        check_flags(INCOMPATIBLE_FLAGS_PER_VARIANT[self.variant], file_specific_flags,
+                    "INCOMPATIBLE_FLAGS_PER_VARIANT[\""+self.variant+"\"]")
+
+      for variable, incompatible_flags in INCOMPATIBLE_FLAGS_PER_BUILD_VARIABLE.items():
+        if self.suite.statusfile.variables[variable]:
+            check_flags(incompatible_flags, file_specific_flags,
+              "INCOMPATIBLE_FLAGS_PER_BUILD_VARIABLE[\""+variable+"\"]")
+
+      for extra_flag, incompatible_flags in INCOMPATIBLE_FLAGS_PER_EXTRA_FLAG.items():
+        if has_flag(extra_flag, extra_flags):
+            check_flags(incompatible_flags, file_specific_flags,
+              "INCOMPATIBLE_FLAGS_PER_EXTRA_FLAG[\""+extra_flag+"\"]")
+    return self._expected_outcomes
+
   @property
   def do_skip(self):
-    return statusfile.SKIP in self._statusfile_outcomes
+    return (statusfile.SKIP in self._statusfile_outcomes and
+            not self.suite.test_config.run_skipped)
 
   @property
   def is_slow(self):
@@ -150,6 +219,11 @@ class TestCase(object):
     return (statusfile.PASS in self._statusfile_outcomes and
             statusfile.FAIL in self._statusfile_outcomes and
             statusfile.CRASH not in self._statusfile_outcomes)
+
+  @property
+  def is_fail(self):
+     return (statusfile.FAIL in self._statusfile_outcomes and
+             statusfile.PASS not in self._statusfile_outcomes)
 
   @property
   def only_standard_variant(self):
@@ -169,9 +243,9 @@ class TestCase(object):
     """Gets command parameters and combines them in the following order:
       - files [empty by default]
       - random seed
+      - mode flags (based on chosen mode)
       - extra flags (from command line)
       - user flags (variant/fuzzer flags)
-      - mode flags (based on chosen mode)
       - source flags (from source code) [empty by default]
       - test-suite flags
       - statusfile flags
@@ -182,9 +256,9 @@ class TestCase(object):
     return (
         self._get_files_params() +
         self._get_random_seed_flags() +
+        self._get_mode_flags() +
         self._get_extra_flags() +
         self._get_variant_flags() +
-        self._get_mode_flags() +
         self._get_source_flags() +
         self._get_suite_flags() +
         self._get_statusfile_flags()
@@ -195,6 +269,9 @@ class TestCase(object):
 
   def _get_files_params(self):
     return []
+
+  def _get_timeout_param(self):
+    return None
 
   def _get_random_seed_flags(self):
     return ['--random-seed=%d' % self.random_seed]
@@ -232,11 +309,16 @@ class TestCase(object):
     timeout = self._test_config.timeout
     if "--stress-opt" in params:
       timeout *= 4
+    if "--jitless" in params:
+      timeout *= 2
+    if "--no-opt" in params:
+      timeout *= 2
     if "--noenable-vfp3" in params:
       timeout *= 2
-
-    # TODO(majeski): make it slow outcome dependent.
-    timeout *= 2
+    if self._get_timeout_param() == TIMEOUT_LONG:
+      timeout *= 10
+    if self.is_slow:
+      timeout *= 4
     return timeout
 
   def get_shell(self):
@@ -254,6 +336,7 @@ class TestCase(object):
       timeout=timeout,
       verbose=self._test_config.verbose,
       resources_func=self._get_resources,
+      handle_sigterm=True,
     )
 
   def _parse_source_flags(self, source=None):
@@ -326,12 +409,10 @@ class D8TestCase(TestCase):
     for match in LOAD_PATTERN.finditer(source):
       # Files in load statements are relative to base dir.
       add_path(match.group(1))
-    for match in MODULE_RESOURCES_PATTERN_1.finditer(source):
+    for match in MODULE_RESOURCES_PATTERN.finditer(source):
       # Imported files are relative to the file importing them.
-      add_path(os.path.join(os.path.dirname(file), match.group(1)))
-    for match in MODULE_RESOURCES_PATTERN_2.finditer(source):
-      # Imported files are relative to the file importing them.
-      add_path(os.path.join(os.path.dirname(file), match.group(1)))
+      add_path(os.path.normpath(
+        os.path.join(os.path.dirname(file), match.group(1))))
     return result
 
   def _get_resources(self):

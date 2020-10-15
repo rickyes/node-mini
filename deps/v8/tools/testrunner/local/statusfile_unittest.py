@@ -3,10 +3,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+
+from __future__ import absolute_import
+import os
+import sys
 import unittest
 
-import statusfile
-from utils import Freeze
+TOOLS_PATH = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+sys.path.append(TOOLS_PATH)
+
+from testrunner.local import statusfile
+from testrunner.local.utils import Freeze
 
 
 TEST_VARIABLES = {

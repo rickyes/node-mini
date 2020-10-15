@@ -5,21 +5,26 @@
 #ifndef V8_DEBUG_DEBUG_FRAMES_H_
 #define V8_DEBUG_DEBUG_FRAMES_H_
 
-#include "src/deoptimizer.h"
-#include "src/frames.h"
-#include "src/isolate.h"
-#include "src/objects.h"
-#include "src/wasm/wasm-interpreter.h"
+#include <memory>
+
+#include "src/deoptimizer/deoptimizer.h"
+#include "src/execution/isolate.h"
+#include "src/execution/v8threads.h"
+#include "src/objects/objects.h"
 
 namespace v8 {
 namespace internal {
+
+class JavaScriptFrame;
+class StandardFrame;
+class WasmFrame;
 
 class FrameInspector {
  public:
   FrameInspector(StandardFrame* frame, int inlined_frame_index,
                  Isolate* isolate);
 
-  ~FrameInspector();  // NOLINT (modernize-use-equals-default)
+  ~FrameInspector();
 
   int GetParametersCount();
   Handle<JSFunction> GetFunction() const { return function_; }
@@ -36,10 +41,7 @@ class FrameInspector {
   bool IsWasm();
   bool IsJavaScript();
 
-  inline JavaScriptFrame* javascript_frame() {
-    return frame_->is_arguments_adaptor() ? ArgumentsAdaptorFrame::cast(frame_)
-                                          : JavaScriptFrame::cast(frame_);
-  }
+  JavaScriptFrame* javascript_frame();
 
   int inlined_frame_index() const { return inlined_frame_index_; }
 
@@ -50,7 +52,6 @@ class FrameInspector {
   StandardFrame* frame_;
   int inlined_frame_index_;
   std::unique_ptr<DeoptimizedFrameInfo> deoptimized_frame_;
-  wasm::WasmInterpreter::FramePtr wasm_interpreted_frame_;
   Isolate* isolate_;
   Handle<Script> script_;
   Handle<Object> receiver_;
@@ -64,6 +65,24 @@ class FrameInspector {
 
   DISALLOW_COPY_AND_ASSIGN(FrameInspector);
 };
+
+class RedirectActiveFunctions : public ThreadVisitor {
+ public:
+  enum class Mode {
+    kUseOriginalBytecode,
+    kUseDebugBytecode,
+  };
+
+  explicit RedirectActiveFunctions(SharedFunctionInfo shared, Mode mode);
+
+  void VisitThread(Isolate* isolate, ThreadLocalTop* top) override;
+
+ private:
+  SharedFunctionInfo shared_;
+  Mode mode_;
+  DisallowHeapAllocation no_gc_;
+};
+
 }  // namespace internal
 }  // namespace v8
 

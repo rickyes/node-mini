@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/api-inl.h"
-#include "src/code-factory.h"
-#include "src/code-stubs.h"
-#include "src/compiler.h"
+#include "src/api/api-inl.h"
+#include "src/codegen/code-factory.h"
+#include "src/codegen/compiler.h"
+#include "src/codegen/optimized-compilation-info.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/linkage.h"
@@ -14,8 +14,7 @@
 #include "src/compiler/operator.h"
 #include "src/compiler/pipeline.h"
 #include "src/compiler/schedule.h"
-#include "src/objects-inl.h"
-#include "src/optimized-compilation-info.h"
+#include "src/objects/objects-inl.h"
 #include "src/parsing/parse-info.h"
 #include "src/zone/zone.h"
 #include "test/cctest/cctest.h"
@@ -50,7 +49,7 @@ TEST(TestLinkageCreate) {
   Handle<JSFunction> function = Compile("a + b");
   Handle<SharedFunctionInfo> shared(function->shared(), handles.main_isolate());
   OptimizedCompilationInfo info(handles.main_zone(), function->GetIsolate(),
-                                shared, function);
+                                shared, function, CodeKind::TURBOFAN);
   auto call_descriptor = Linkage::ComputeIncoming(info.zone(), &info);
   CHECK(call_descriptor);
 }
@@ -68,7 +67,7 @@ TEST(TestLinkageJSFunctionIncoming) {
     Handle<SharedFunctionInfo> shared(function->shared(),
                                       handles.main_isolate());
     OptimizedCompilationInfo info(handles.main_zone(), function->GetIsolate(),
-                                  shared, function);
+                                  shared, function, CodeKind::TURBOFAN);
     auto call_descriptor = Linkage::ComputeIncoming(info.zone(), &info);
     CHECK(call_descriptor);
 
@@ -85,7 +84,7 @@ TEST(TestLinkageJSCall) {
   Handle<JSFunction> function = Compile("a + c");
   Handle<SharedFunctionInfo> shared(function->shared(), handles.main_isolate());
   OptimizedCompilationInfo info(handles.main_zone(), function->GetIsolate(),
-                                shared, function);
+                                shared, function, CodeKind::TURBOFAN);
 
   for (int i = 0; i < 32; i++) {
     auto call_descriptor = Linkage::GetJSCallDescriptor(
@@ -105,10 +104,12 @@ TEST(TestLinkageRuntimeCall) {
 
 
 TEST(TestLinkageStubCall) {
+  // TODO(bbudge) Add tests for FP registers.
   Isolate* isolate = CcTest::InitIsolateOnce();
   Zone zone(isolate->allocator(), ZONE_NAME);
   Callable callable = Builtins::CallableFor(isolate, Builtins::kToNumber);
-  OptimizedCompilationInfo info(ArrayVector("test"), &zone, Code::STUB);
+  OptimizedCompilationInfo info(ArrayVector("test"), &zone,
+                                CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING);
   auto call_descriptor = Linkage::GetStubCallDescriptor(
       &zone, callable.descriptor(), 0, CallDescriptor::kNoFlags,
       Operator::kNoProperties);
@@ -117,7 +118,35 @@ TEST(TestLinkageStubCall) {
   CHECK_EQ(1, static_cast<int>(call_descriptor->ReturnCount()));
   CHECK_EQ(Operator::kNoProperties, call_descriptor->properties());
   CHECK_EQ(false, call_descriptor->IsJSFunctionCall());
+
+  CHECK_EQ(call_descriptor->GetParameterType(0), MachineType::AnyTagged());
+  CHECK_EQ(call_descriptor->GetReturnType(0), MachineType::AnyTagged());
   // TODO(titzer): test linkage creation for outgoing stub calls.
+}
+
+TEST(TestFPLinkageStubCall) {
+  Isolate* isolate = CcTest::InitIsolateOnce();
+  Zone zone(isolate->allocator(), ZONE_NAME);
+  Callable callable =
+      Builtins::CallableFor(isolate, Builtins::kWasmFloat64ToNumber);
+  OptimizedCompilationInfo info(ArrayVector("test"), &zone,
+                                CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING);
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      &zone, callable.descriptor(), 0, CallDescriptor::kNoFlags,
+      Operator::kNoProperties);
+  CHECK(call_descriptor);
+  CHECK_EQ(0, static_cast<int>(call_descriptor->StackParameterCount()));
+  CHECK_EQ(1, static_cast<int>(call_descriptor->ParameterCount()));
+  CHECK_EQ(1, static_cast<int>(call_descriptor->ReturnCount()));
+  CHECK_EQ(Operator::kNoProperties, call_descriptor->properties());
+  CHECK_EQ(false, call_descriptor->IsJSFunctionCall());
+
+  CHECK_EQ(call_descriptor->GetInputType(1), MachineType::Float64());
+  CHECK(call_descriptor->GetInputLocation(1).IsRegister());
+  CHECK_EQ(call_descriptor->GetReturnType(0), MachineType::AnyTagged());
+  CHECK(call_descriptor->GetReturnLocation(0).IsRegister());
+  CHECK_EQ(call_descriptor->GetReturnLocation(0).GetLocation(),
+           kReturnRegister0.code());
 }
 
 }  // namespace compiler

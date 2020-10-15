@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --harmony-intl-list-format
-
 let listFormat = new Intl.ListFormat();
 // The default style is 'long'
 assertEquals('long', listFormat.resolvedOptions().style);
@@ -146,7 +144,3 @@ assertEquals(
 assertEquals(
     'ar',
     (new Intl.ListFormat(['xyz', 'ar'])).resolvedOptions().locale);
-
-assertEquals(
-    'ar',
-    (new Intl.ListFormat(['i-default', 'ar'])).resolvedOptions().locale);

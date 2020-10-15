@@ -4,10 +4,10 @@
 
 #include "src/compiler/js-graph.h"
 
-#include "src/code-factory.h"
+#include "src/codegen/code-factory.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/typer.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -44,26 +44,6 @@ Node* JSGraph::CEntryStubConstant(int result_size, SaveFPRegsMode save_doubles,
   }
   return HeapConstant(CodeFactory::CEntry(isolate(), result_size, save_doubles,
                                           argv_mode, builtin_exit_frame));
-}
-
-Node* JSGraph::Constant(Handle<Object> value) {
-  // Dereference the handle to determine if a number constant or other
-  // canonicalized node can be used.
-  if (value->IsNumber()) {
-    return Constant(value->Number());
-  } else if (value->IsUndefined(isolate())) {
-    return UndefinedConstant();
-  } else if (value->IsTrue(isolate())) {
-    return TrueConstant();
-  } else if (value->IsFalse(isolate())) {
-    return FalseConstant();
-  } else if (value->IsNull(isolate())) {
-    return NullConstant();
-  } else if (value->IsTheHole(isolate())) {
-    return TheHoleConstant();
-  } else {
-    return HeapConstant(Handle<HeapObject>::cast(value));
-  }
 }
 
 Node* JSGraph::Constant(const ObjectRef& ref) {
@@ -125,19 +105,32 @@ void JSGraph::GetCachedNodes(NodeVector* nodes) {
 #undef DO_CACHED_FIELD
 }
 
-DEFINE_GETTER(AllocateInNewSpaceStubConstant,
-              HeapConstant(BUILTIN_CODE(isolate(), AllocateInNewSpace)))
+DEFINE_GETTER(AllocateInYoungGenerationStubConstant,
+              HeapConstant(BUILTIN_CODE(isolate(), AllocateInYoungGeneration)))
 
-DEFINE_GETTER(AllocateInOldSpaceStubConstant,
-              HeapConstant(BUILTIN_CODE(isolate(), AllocateInOldSpace)))
+DEFINE_GETTER(AllocateRegularInYoungGenerationStubConstant,
+              HeapConstant(BUILTIN_CODE(isolate(),
+                                        AllocateRegularInYoungGeneration)))
+
+DEFINE_GETTER(AllocateInOldGenerationStubConstant,
+              HeapConstant(BUILTIN_CODE(isolate(), AllocateInOldGeneration)))
+
+DEFINE_GETTER(AllocateRegularInOldGenerationStubConstant,
+              HeapConstant(BUILTIN_CODE(isolate(),
+                                        AllocateRegularInOldGeneration)))
 
 DEFINE_GETTER(ArrayConstructorStubConstant,
               HeapConstant(BUILTIN_CODE(isolate(), ArrayConstructorImpl)))
+
+DEFINE_GETTER(BigIntMapConstant, HeapConstant(factory()->bigint_map()))
 
 DEFINE_GETTER(BooleanMapConstant, HeapConstant(factory()->boolean_map()))
 
 DEFINE_GETTER(ToNumberBuiltinConstant,
               HeapConstant(BUILTIN_CODE(isolate(), ToNumber)))
+
+DEFINE_GETTER(PlainPrimitiveToNumberBuiltinConstant,
+              HeapConstant(BUILTIN_CODE(isolate(), PlainPrimitiveToNumber)))
 
 DEFINE_GETTER(EmptyFixedArrayConstant,
               HeapConstant(factory()->empty_fixed_array()))
@@ -151,6 +144,9 @@ DEFINE_GETTER(PropertyArrayMapConstant,
 
 DEFINE_GETTER(FixedDoubleArrayMapConstant,
               HeapConstant(factory()->fixed_double_array_map()))
+
+DEFINE_GETTER(WeakFixedArrayMapConstant,
+              HeapConstant(factory()->weak_fixed_array_map()))
 
 DEFINE_GETTER(HeapNumberMapConstant, HeapConstant(factory()->heap_number_map()))
 
@@ -170,6 +166,8 @@ DEFINE_GETTER(NullConstant, HeapConstant(factory()->null_value()))
 
 DEFINE_GETTER(ZeroConstant, NumberConstant(0.0))
 
+DEFINE_GETTER(MinusZeroConstant, NumberConstant(-0.0))
+
 DEFINE_GETTER(OneConstant, NumberConstant(1.0))
 
 DEFINE_GETTER(MinusOneConstant, NumberConstant(-1.0))
@@ -181,11 +179,11 @@ DEFINE_GETTER(EmptyStateValues,
               graph()->NewNode(common()->StateValues(0,
                                                      SparseInputMask::Dense())))
 
-DEFINE_GETTER(SingleDeadTypedStateValues,
-              graph()->NewNode(common()->TypedStateValues(
-                  new (graph()->zone()->New(sizeof(ZoneVector<MachineType>)))
-                      ZoneVector<MachineType>(0, graph()->zone()),
-                  SparseInputMask(SparseInputMask::kEndMarker << 1))))
+DEFINE_GETTER(
+    SingleDeadTypedStateValues,
+    graph()->NewNode(common()->TypedStateValues(
+        graph()->zone()->New<ZoneVector<MachineType>>(0, graph()->zone()),
+        SparseInputMask(SparseInputMask::kEndMarker << 1))))
 
 #undef DEFINE_GETTER
 #undef GET_CACHED_FIELD

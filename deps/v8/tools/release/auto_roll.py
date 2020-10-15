@@ -3,6 +3,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# for py2/py3 compatibility
+from __future__ import print_function
+
 import argparse
 import os
 import sys
@@ -14,13 +17,17 @@ ROLL_SUMMARY = ("Summary of changes available at:\n"
 
 ISSUE_MSG = (
 """Please follow these instructions for assigning/CC'ing issues:
-https://github.com/v8/v8/wiki/Triaging%20issues
+https://v8.dev/docs/triage-issues
 
 Please close rolling in case of a roll revert:
 https://v8-roll.appspot.com/
 This only works with a Google account.
 
-CQ_INCLUDE_TRYBOTS=master.tryserver.blink:linux_trusty_blink_rel;luci.chromium.try:linux_optional_gpu_tests_rel;luci.chromium.try:mac_optional_gpu_tests_rel;luci.chromium.try:win_optional_gpu_tests_rel;luci.chromium.try:android_optional_gpu_tests_rel""")
+CQ_INCLUDE_TRYBOTS=luci.chromium.try:linux-blink-rel
+CQ_INCLUDE_TRYBOTS=luci.chromium.try:linux_optional_gpu_tests_rel
+CQ_INCLUDE_TRYBOTS=luci.chromium.try:mac_optional_gpu_tests_rel
+CQ_INCLUDE_TRYBOTS=luci.chromium.try:win_optional_gpu_tests_rel
+CQ_INCLUDE_TRYBOTS=luci.chromium.try:android_optional_gpu_tests_rel""")
 
 class Preparation(Step):
   MESSAGE = "Preparation."
@@ -39,14 +46,10 @@ class DetectLastRoll(Step):
     self['json_output']['monitoring_state'] = 'detect_last_roll'
     self["last_roll"] = self._options.last_roll
     if not self["last_roll"]:
-      # Interpret the DEPS file to retrieve the v8 revision.
-      # TODO(machenbach): This should be part or the setdep api of
-      # depot_tools.
-      Var = lambda var: '%s'
-      exec(FileToText(os.path.join(self._options.chromium, "DEPS")))
+      # Get last-rolled v8 revision from Chromium's DEPS file.
+      self["last_roll"] = self.Command(
+          "gclient", "getdep -r src/v8", cwd=self._options.chromium).strip()
 
-      # The revision rolled last.
-      self["last_roll"] = vars['v8_revision']
     self["last_version"] = self.GetVersionTag(self["last_roll"])
     assert self["last_version"], "The last rolled v8 revision is not tagged."
 
@@ -160,9 +163,9 @@ class UploadCL(Step):
                      cq=self._options.use_commit_queue,
                      cq_dry_run=self._options.use_dry_run,
                      cwd=cwd)
-      print "CL uploaded."
+      print("CL uploaded.")
     else:
-      print "Dry run - don't upload."
+      print("Dry run - don't upload.")
 
     self.GitCheckout("master", cwd=cwd)
     self.GitDeleteBranch("work-branch", cwd=cwd)
@@ -205,7 +208,7 @@ class AutoRoll(ScriptsBase):
 
   def _ProcessOptions(self, options):  # pragma: no cover
     if not options.author or not options.reviewer:
-      print "A reviewer (-r) and an author (-a) are required."
+      print("A reviewer (-r) and an author (-a) are required.")
       return False
 
     options.requires_editor = False

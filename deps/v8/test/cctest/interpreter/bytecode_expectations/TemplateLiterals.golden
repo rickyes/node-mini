@@ -13,9 +13,8 @@ snippet: "
 "
 frame size: 3
 parameter count: 1
-bytecode array length: 28
+bytecode array length: 27
 bytecodes: [
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
@@ -45,9 +44,8 @@ snippet: "
 "
 frame size: 3
 parameter count: 1
-bytecode array length: 28
+bytecode array length: 27
 bytecodes: [
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
@@ -77,9 +75,8 @@ snippet: "
 "
 frame size: 3
 parameter count: 1
-bytecode array length: 28
+bytecode array length: 27
 bytecodes: [
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
@@ -109,9 +106,8 @@ snippet: "
 "
 frame size: 3
 parameter count: 1
-bytecode array length: 50
+bytecode array length: 49
 bytecodes: [
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
@@ -153,9 +149,8 @@ snippet: "
 "
 frame size: 4
 parameter count: 1
-bytecode array length: 35
+bytecode array length: 34
 bytecodes: [
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
@@ -189,28 +184,27 @@ snippet: "
 "
 frame size: 4
 parameter count: 1
-bytecode array length: 45
+bytecode array length: 44
 bytecodes: [
-                B(CreateClosure), U8(0), U8(0), U8(2),
+  /*   30 E> */ B(CreateClosure), U8(0), U8(0), U8(2),
                 B(Star), R(2),
-  /*   30 E> */ B(StackCheck),
   /*   42 S> */ B(LdaSmi), I8(1),
                 B(Star), R(0),
   /*   53 S> */ B(LdaSmi), I8(2),
                 B(Star), R(1),
   /*   80 S> */ B(LdaConstant), U8(1),
                 B(Star), R(3),
-  /*   96 E> */ B(CallUndefinedReceiver2), R(2), R(0), R(1), U8(2),
+  /*   96 E> */ B(CallUndefinedReceiver2), R(2), R(0), R(1), U8(1),
                 B(ToString),
-                B(Add), R(3), U8(1),
+                B(Add), R(3), U8(0),
                 B(Star), R(3),
                 B(Ldar), R(0),
   /*  108 E> */ B(ToString),
-                B(Add), R(3), U8(1),
+                B(Add), R(3), U8(0),
                 B(Star), R(3),
                 B(Ldar), R(1),
   /*  112 E> */ B(ToString),
-                B(Add), R(3), U8(1),
+                B(Add), R(3), U8(0),
   /*  116 S> */ B(Return),
 ]
 constant pool: [

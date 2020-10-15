@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --harmony-locale
-
 // Locale constructor can't be called as function.
 assertThrows(() => Intl.Locale('sr'), TypeError);
 
@@ -21,9 +19,8 @@ assertThrows(() => new Intl.Locale('abcdefghi'), RangeError);
 // Options will be force converted into Object.
 assertDoesNotThrow(() => new Intl.Locale('sr', 5));
 
-// ICU problem - locale length is limited.
-// http://bugs.icu-project.org/trac/ticket/13417.
-assertThrows(
+// Regression for http://bugs.icu-project.org/trac/ticket/13417.
+assertDoesNotThrow(
     () => new Intl.Locale(
         'sr-cyrl-rs-t-ja-u-ca-islamic-cu-rsd-tz-uslax-x-whatever', {
           calendar: 'buddhist',
@@ -86,9 +83,7 @@ assertThrows(
     }),
     Error);
 
-// These don't throw yet, we need to implement language/script/region
-// override logic first.
-assertDoesNotThrow(
+assertThrows(
     () => new Intl.Locale('en-US', {
       get language() {
         throw new Error('foo');
@@ -96,7 +91,7 @@ assertDoesNotThrow(
     }),
     Error);
 
-assertDoesNotThrow(
+assertThrows(
     () => new Intl.Locale('en-US', {
       get script() {
         throw new Error('foo');
@@ -104,7 +99,7 @@ assertDoesNotThrow(
     }),
     Error);
 
-assertDoesNotThrow(
+assertThrows(
     () => new Intl.Locale('en-US', {
       get region() {
         throw new Error('foo');

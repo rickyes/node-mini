@@ -7,13 +7,20 @@
 
 #include "src/base/debug/stack_trace.h"
 
+// This file can't use "src/base/win32-headers.h" because it defines symbols
+// that lead to compilation errors. But `NOMINMAX` should be defined to disable
+// defining of the `min` and `max` MACROS.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <dbghelp.h>
-#include <Shlwapi.h>
 #include <stddef.h>
 
 #include <iostream>
 #include <memory>
+#include <string>
 
 #include "src/base/logging.h"
 #include "src/base/macros.h"
@@ -40,12 +47,6 @@ long WINAPI StackDumpExceptionFilter(EXCEPTION_POINTERS* info) {  // NOLINT
   }
   if (g_previous_filter) return g_previous_filter(info);
   return EXCEPTION_CONTINUE_SEARCH;
-}
-
-void GetExePath(wchar_t* path_out) {
-  GetModuleFileName(nullptr, path_out, MAX_PATH);
-  path_out[MAX_PATH - 1] = L'\0';
-  PathRemoveFileSpec(path_out);
 }
 
 bool InitializeSymbols() {
@@ -80,9 +81,13 @@ bool InitializeSymbols() {
   }
 
   wchar_t exe_path[MAX_PATH];
-  GetExePath(exe_path);
-  std::wstring new_path(std::wstring(symbols_path.get()) + L";" +
-                        std::wstring(exe_path));
+  GetModuleFileName(nullptr, exe_path, MAX_PATH);
+  std::wstring exe_path_wstring(exe_path);
+  // To get the path without the filename, we just need to remove the final
+  // slash and everything after it.
+  std::wstring new_path(
+      std::wstring(symbols_path.get()) + L";" +
+      exe_path_wstring.substr(0, exe_path_wstring.find_last_of(L"\\/")));
   if (!SymSetSearchPathW(GetCurrentProcess(), new_path.c_str())) {
     g_init_error = GetLastError();
     return false;

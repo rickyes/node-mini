@@ -55,14 +55,15 @@ var entriesProviders = {
   'mac': MacCppEntriesProvider
 };
 
-var params = processArguments(this.arguments || []);
+var params = processArguments(arguments);
 var sourceMap = null;
 if (params.sourceMap) {
   initSourceMapSupport();
   sourceMap = SourceMap.load(params.sourceMap);
 }
 var tickProcessor = new TickProcessor(
-  new (entriesProviders[params.platform])(params.nm, params.targetRootFS),
+  new (entriesProviders[params.platform])(params.nm, params.objdump, params.targetRootFS,
+                                          params.apkEmbeddedLibrary),
   params.separateIc,
   params.separateBytecodes,
   params.separateBuiltins,

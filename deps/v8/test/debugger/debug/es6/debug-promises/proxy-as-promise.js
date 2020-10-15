@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+ // Flags: --ignore-unhandled-promises
 
 // Test debug events when we listen to all exceptions and
 // there is a catch handler for the exception thrown in a Promise.
@@ -39,4 +40,4 @@ function listener(event, exec_state, event_data, data) {}
 Debug.setBreakOnUncaughtException();
 Debug.setListener(listener);
 
-%RunMicrotasks();
+%PerformMicrotaskCheckpoint();

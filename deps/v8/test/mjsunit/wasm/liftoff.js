@@ -2,17 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --allow-natives-syntax --liftoff --wasm-async-compilation
-// Flags: --no-future --no-wasm-tier-up
+// Flags: --allow-natives-syntax --liftoff --no-wasm-tier-up
 
-load('test/mjsunit/wasm/wasm-constants.js');
 load('test/mjsunit/wasm/wasm-module-builder.js');
 
 (function testLiftoffFlag() {
   print(arguments.callee.name);
   const builder = new WasmModuleBuilder();
   builder.addFunction('i32_add', kSig_i_ii)
-      .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32Add])
+      .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32Add])
       .exportFunc();
 
   const module = new WebAssembly.Module(builder.toBuffer());
@@ -28,7 +26,7 @@ load('test/mjsunit/wasm/wasm-module-builder.js');
   print(arguments.callee.name);
   const builder = new WasmModuleBuilder();
   builder.addFunction('i32_add', kSig_i_ii)
-      .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32Add])
+      .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32Add])
       .exportFunc();
 
   const instance = builder.instantiate();
@@ -40,7 +38,7 @@ async function testLiftoffAsync() {
   print(arguments.callee.name);
   const builder = new WasmModuleBuilder();
   builder.addFunction('i32_add', kSig_i_ii)
-      .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32Add])
+      .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32Add])
       .exportFunc();
 
   print('Compiling...');

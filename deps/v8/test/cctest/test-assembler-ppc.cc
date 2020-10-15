@@ -25,24 +25,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
-#include "src/disassembler.h"
+#include "src/codegen/ppc/assembler-ppc-inl.h"
+#include "src/diagnostics/disassembler.h"
+#include "src/execution/simulator.h"
 #include "src/heap/factory.h"
-#include "src/ppc/assembler-ppc-inl.h"
-#include "src/simulator.h"
 #include "test/cctest/cctest.h"
+#include "test/common/assembler-tester.h"
 
 namespace v8 {
 namespace internal {
 
 // TODO(ppc): Refine these signatures per test case, they can have arbitrary
 // return and argument types and arbitrary number of arguments.
-using F_iiiii = Object*(int x, int p1, int p2, int p3, int p4);
-using F_piiii = Object*(void* p0, int p1, int p2, int p3, int p4);
-using F_ppiii = Object*(void* p0, void* p1, int p2, int p3, int p4);
-using F_pppii = Object*(void* p0, void* p1, void* p2, int p3, int p4);
-using F_ippii = Object*(int p0, void* p1, void* p2, int p3, int p4);
+using F_iiiii = void*(int x, int p1, int p2, int p3, int p4);
+using F_piiii = void*(void* p0, int p1, int p2, int p3, int p4);
+using F_ppiii = void*(void* p0, void* p1, int p2, int p3, int p4);
+using F_pppii = void*(void* p0, void* p1, void* p2, int p3, int p4);
+using F_ippii = void*(int p0, void* p1, void* p2, int p3, int p4);
 
 #define __ assm.
 
@@ -52,17 +53,16 @@ TEST(0) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
-
-  __ function_descriptor();
+  Assembler assm(AssemblerOptions{});
 
   __ add(r3, r3, r4);
   __ blr();
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Handle<Code> code =
-      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+  Handle<Code> code = Factory::CodeBuilder(
+                          isolate, desc, CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING)
+                          .Build();
 #ifdef DEBUG
   code->Print();
 #endif
@@ -79,10 +79,8 @@ TEST(1) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
-
-  __ function_descriptor();
 
   __ mr(r4, r3);
   __ li(r3, Operand::Zero());
@@ -99,8 +97,9 @@ TEST(1) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Handle<Code> code =
-      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+  Handle<Code> code = Factory::CodeBuilder(
+                          isolate, desc, CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING)
+                          .Build();
 #ifdef DEBUG
   code->Print();
 #endif
@@ -116,10 +115,8 @@ TEST(2) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
-
-  __ function_descriptor();
 
   __ mr(r4, r3);
   __ li(r3, Operand(1));
@@ -149,8 +146,9 @@ TEST(2) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Handle<Code> code =
-      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+  Handle<Code> code = Factory::CodeBuilder(
+                          isolate, desc, CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING)
+                          .Build();
 #ifdef DEBUG
   code->Print();
 #endif
@@ -166,17 +164,14 @@ TEST(3) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct T {
     int i;
     char c;
     int16_t s;
-  } T;
+  };
   T t;
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
-  Label L, C;
-
-  __ function_descriptor();
+  Assembler assm(AssemblerOptions{});
 
 // build a frame
 #if V8_TARGET_ARCH_PPC64
@@ -221,8 +216,9 @@ TEST(3) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Handle<Code> code =
-      isolate->factory()->NewCode(desc, Code::STUB, Handle<Code>());
+  Handle<Code> code = Factory::CodeBuilder(
+                          isolate, desc, CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING)
+                          .Build();
 #ifdef DEBUG
   code->Print();
 #endif
@@ -245,7 +241,7 @@ TEST(4) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct T {
     double a;
     double b;
     double c;
@@ -259,12 +255,12 @@ TEST(4) {
     double n;
     float x;
     float y;
-  } T;
+  };
   T t;
 
   // Create a function that accepts &t, and loads, manipulates, and stores
   // the doubles and floats.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label L, C;
 
   if (CpuFeatures::IsSupported(VFP3)) {
@@ -333,9 +329,9 @@ TEST(4) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -379,7 +375,7 @@ TEST(5) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(ARMv7)) {
     CpuFeatures::Scope scope(ARMv7);
@@ -393,9 +389,9 @@ TEST(5) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -415,7 +411,7 @@ TEST(6) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(ARMv7)) {
     CpuFeatures::Scope scope(ARMv7);
@@ -428,9 +424,9 @@ TEST(6) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -457,7 +453,7 @@ static void TestRoundingMode(VCVTTypes types,
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP3)) {
     CpuFeatures::Scope scope(VFP3);
@@ -503,9 +499,9 @@ static void TestRoundingMode(VCVTTypes types,
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -635,7 +631,7 @@ TEST(8) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct D {
     double a;
     double b;
     double c;
@@ -644,10 +640,10 @@ TEST(8) {
     double f;
     double g;
     double h;
-  } D;
+  };
   D d;
 
-  typedef struct {
+  struct F {
     float a;
     float b;
     float c;
@@ -656,12 +652,12 @@ TEST(8) {
     float f;
     float g;
     float h;
-  } F;
+  };
   F f;
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -690,9 +686,9 @@ TEST(8) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -746,7 +742,7 @@ TEST(9) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct D {
     double a;
     double b;
     double c;
@@ -755,10 +751,10 @@ TEST(9) {
     double f;
     double g;
     double h;
-  } D;
+  };
   D d;
 
-  typedef struct {
+  struct F {
     float a;
     float b;
     float c;
@@ -767,12 +763,12 @@ TEST(9) {
     float f;
     float g;
     float h;
-  } F;
+  };
   F f;
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -805,9 +801,9 @@ TEST(9) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -861,7 +857,7 @@ TEST(10) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct D {
     double a;
     double b;
     double c;
@@ -870,10 +866,10 @@ TEST(10) {
     double f;
     double g;
     double h;
-  } D;
+  };
   D d;
 
-  typedef struct {
+  struct F {
     float a;
     float b;
     float c;
@@ -882,12 +878,12 @@ TEST(10) {
     float f;
     float g;
     float h;
-  } F;
+  };
   F f;
 
   // Create a function that uses vldm/vstm to move some double and
   // single precision values around in memory.
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   if (CpuFeatures::IsSupported(VFP2)) {
     CpuFeatures::Scope scope(VFP2);
@@ -916,9 +912,9 @@ TEST(10) {
 
     CodeDesc desc;
     assm.GetCode(isolate, &desc);
-    Object* code = isolate->heap()->CreateCode(
+    Object code = isolate->heap()->CreateCode(
         desc,
-        Code::STUB,
+        CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
         Handle<Code>())->ToObjectChecked();
     CHECK(code->IsCode());
 #ifdef DEBUG
@@ -972,18 +968,18 @@ TEST(11) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  typedef struct {
+  struct I {
     int32_t a;
     int32_t b;
     int32_t c;
     int32_t d;
-  } I;
+  };
   I i;
 
   i.a = 0xABCD0001;
   i.b = 0xABCD0000;
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
 
   // Test HeapObject untagging.
   __ ldr(r1, MemOperand(r0, offsetof(I, a)));
@@ -1013,9 +1009,9 @@ TEST(11) {
 
   CodeDesc desc;
   assm.GetCode(isolate, &desc);
-  Object* code = isolate->heap()->CreateCode(
+  Object code = isolate->heap()->CreateCode(
       desc,
-      Code::STUB,
+      CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING,
       Handle<Code>())->ToObjectChecked();
   CHECK(code->IsCode());
 #ifdef DEBUG
@@ -1037,7 +1033,7 @@ TEST(12) {
   Isolate* isolate = CcTest::i_isolate();
   HandleScope scope(isolate);
 
-  Assembler assm(AssemblerOptions{}, nullptr, 0);
+  Assembler assm(AssemblerOptions{});
   Label target;
   __ b(eq, &target);
   __ b(ne, &target);

@@ -5,9 +5,11 @@
 #ifndef V8_DEBUG_DEBUG_STACK_TRACE_ITERATOR_H_
 #define V8_DEBUG_DEBUG_STACK_TRACE_ITERATOR_H_
 
+#include <memory>
+
 #include "src/debug/debug-frames.h"
 #include "src/debug/debug-interface.h"
-#include "src/frames.h"
+#include "src/execution/frames.h"
 
 namespace v8 {
 namespace internal {
@@ -32,6 +34,8 @@ class DebugStackTraceIterator final : public debug::StackTraceIterator {
   bool Restart() override;
   v8::MaybeLocal<v8::Value> Evaluate(v8::Local<v8::String> source,
                                      bool throw_on_side_effect) override;
+  v8::MaybeLocal<v8::String> EvaluateWasm(
+      internal::Vector<const internal::byte> source, int frame_index) override;
 
  private:
   Isolate* isolate_;

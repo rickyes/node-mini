@@ -7,9 +7,11 @@
 
 #include "src/ic/handler-configuration.h"
 
-#include "src/field-index-inl.h"
-#include "src/handles-inl.h"
-#include "src/objects-inl.h"
+#include "src/handles/handles-inl.h"
+#include "src/objects/data-handler-inl.h"
+#include "src/objects/field-index-inl.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/smi.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -17,11 +19,13 @@
 namespace v8 {
 namespace internal {
 
+OBJECT_CONSTRUCTORS_IMPL(LoadHandler, DataHandler)
+
 CAST_ACCESSOR(LoadHandler)
 
 // Decodes kind from Smi-handler.
-LoadHandler::Kind LoadHandler::GetHandlerKind(Smi* smi_handler) {
-  return KindBits::decode(smi_handler->value());
+LoadHandler::Kind LoadHandler::GetHandlerKind(Smi smi_handler) {
+  return KindBits::decode(smi_handler.value());
 }
 
 Handle<Smi> LoadHandler::LoadNormal(Isolate* isolate) {
@@ -39,16 +43,25 @@ Handle<Smi> LoadHandler::LoadInterceptor(Isolate* isolate) {
   return handle(Smi::FromInt(config), isolate);
 }
 
-Handle<Smi> LoadHandler::LoadField(Isolate* isolate, FieldIndex field_index) {
-  int config = KindBits::encode(kField) |
-               IsInobjectBits::encode(field_index.is_inobject()) |
-               IsDoubleBits::encode(field_index.is_double()) |
-               FieldIndexBits::encode(field_index.index());
+Handle<Smi> LoadHandler::LoadSlow(Isolate* isolate) {
+  int config = KindBits::encode(kSlow);
   return handle(Smi::FromInt(config), isolate);
 }
 
-Handle<Smi> LoadHandler::LoadConstant(Isolate* isolate, int descriptor) {
-  int config = KindBits::encode(kConstant) | DescriptorBits::encode(descriptor);
+Handle<Smi> LoadHandler::LoadField(Isolate* isolate, FieldIndex field_index,
+                                   ElementsKind kind) {
+  int config = KindBits::encode(kField) |
+               IsInobjectBits::encode(field_index.is_inobject()) |
+               IsDoubleBits::encode(field_index.is_double()) |
+               FieldIndexBits::encode(field_index.index()) |
+               CompactElementsKindBits::encode(ToCompactElementsKind(kind));
+  return handle(Smi::FromInt(config), isolate);
+}
+
+Handle<Smi> LoadHandler::LoadConstantFromPrototype(Isolate* isolate,
+                                                   ElementsKind kind) {
+  int config = KindBits::encode(kConstantFromPrototype) |
+               CompactElementsKindBits::encode(ToCompactElementsKind(kind));
   return handle(Smi::FromInt(config), isolate);
 }
 
@@ -109,6 +122,8 @@ Handle<Smi> LoadHandler::LoadIndexedString(Isolate* isolate,
   return handle(Smi::FromInt(config), isolate);
 }
 
+OBJECT_CONSTRUCTORS_IMPL(StoreHandler, DataHandler)
+
 CAST_ACCESSOR(StoreHandler)
 
 Handle<Smi> StoreHandler::StoreGlobalProxy(Isolate* isolate) {
@@ -121,6 +136,18 @@ Handle<Smi> StoreHandler::StoreNormal(Isolate* isolate) {
   return handle(Smi::FromInt(config), isolate);
 }
 
+Handle<Smi> StoreHandler::StoreInterceptor(Isolate* isolate) {
+  int config = KindBits::encode(kInterceptor);
+  return handle(Smi::FromInt(config), isolate);
+}
+
+Handle<Smi> StoreHandler::StoreSlow(Isolate* isolate,
+                                    KeyedAccessStoreMode store_mode) {
+  int config =
+      KindBits::encode(kSlow) | KeyedAccessStoreModeBits::encode(store_mode);
+  return handle(Smi::FromInt(config), isolate);
+}
+
 Handle<Smi> StoreHandler::StoreProxy(Isolate* isolate) {
   int config = KindBits::encode(kProxy);
   return handle(Smi::FromInt(config), isolate);
@@ -129,29 +156,12 @@ Handle<Smi> StoreHandler::StoreProxy(Isolate* isolate) {
 Handle<Smi> StoreHandler::StoreField(Isolate* isolate, Kind kind,
                                      int descriptor, FieldIndex field_index,
                                      Representation representation) {
-  FieldRepresentation field_rep;
-  switch (representation.kind()) {
-    case Representation::kSmi:
-      field_rep = kSmi;
-      break;
-    case Representation::kDouble:
-      field_rep = kDouble;
-      break;
-    case Representation::kHeapObject:
-      field_rep = kHeapObject;
-      break;
-    case Representation::kTagged:
-      field_rep = kTagged;
-      break;
-    default:
-      UNREACHABLE();
-  }
-
-  DCHECK(kind == kField || (kind == kConstField && FLAG_track_constant_fields));
+  DCHECK(!representation.IsNone());
+  DCHECK(kind == kField || kind == kConstField);
 
   int config = KindBits::encode(kind) |
                IsInobjectBits::encode(field_index.is_inobject()) |
-               FieldRepresentationBits::encode(field_rep) |
+               RepresentationBits::encode(representation.kind()) |
                DescriptorBits::encode(descriptor) |
                FieldIndexBits::encode(field_index.index());
   return handle(Smi::FromInt(config), isolate);
@@ -161,8 +171,6 @@ Handle<Smi> StoreHandler::StoreField(Isolate* isolate, int descriptor,
                                      FieldIndex field_index,
                                      PropertyConstness constness,
                                      Representation representation) {
-  DCHECK_IMPLIES(!FLAG_track_constant_fields,
-                 constness == PropertyConstness::kMutable);
   Kind kind = constness == PropertyConstness::kMutable ? kField : kConstField;
   return StoreField(isolate, kind, descriptor, field_index, representation);
 }

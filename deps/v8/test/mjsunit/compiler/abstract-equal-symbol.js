@@ -11,6 +11,7 @@
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertFalse(foo());
   assertFalse(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -24,6 +25,7 @@
 
   function foo() { return a != b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo());
   assertTrue(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -38,12 +40,16 @@
   function foo(a) { return a == b; }
 
   // Warmup
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo(b));
   assertFalse(foo(a));
   assertTrue(foo(b));
   assertFalse(foo(a));
   %OptimizeFunctionOnNextCall(foo);
   assertTrue(foo(b));
+  // Re-prepare the function immediately to make sure type feedback isn't
+  // cleared by untimely gc, as re-optimization on new feedback is tested below
+  %PrepareFunctionForOptimization(foo);
   assertFalse(foo(a));
   assertOptimized(foo);
 
@@ -65,6 +71,7 @@
   function foo(a) { return a != b; }
 
   // Warmup
+  %PrepareFunctionForOptimization(foo);
   assertFalse(foo(b));
   assertTrue(foo(a));
   assertFalse(foo(b));
@@ -78,6 +85,7 @@
   assertUnoptimized(foo);
 
   // Make sure TurboFan learns the new feedback
+  %PrepareFunctionForOptimization(foo);
   %OptimizeFunctionOnNextCall(foo);
   assertTrue(foo("a"));
   assertOptimized(foo);
@@ -91,6 +99,7 @@
   function foo(a, b) { return a == b; }
 
   // Warmup
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo(b, b));
   assertFalse(foo(a, b));
   assertTrue(foo(a, a));
@@ -104,6 +113,7 @@
   assertUnoptimized(foo);
 
   // Make sure TurboFan learns the new feedback
+  %PrepareFunctionForOptimization(foo);
   %OptimizeFunctionOnNextCall(foo);
   assertFalse(foo("a", b));
   assertOptimized(foo);
@@ -116,6 +126,7 @@
 
   function foo(a, b) { return a != b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertFalse(foo(b, b));
   assertTrue(foo(a, b));
   assertFalse(foo(a, a));
@@ -129,6 +140,7 @@
   assertUnoptimized(foo);
 
   // Make sure TurboFan learns the new feedback
+  %PrepareFunctionForOptimization(foo);
   %OptimizeFunctionOnNextCall(foo);
   assertTrue(foo("a", b));
   assertOptimized(foo);

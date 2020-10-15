@@ -6,9 +6,9 @@
 #define V8_COMPILER_JS_TYPED_LOWERING_H_
 
 #include "src/base/compiler-specific.h"
+#include "src/common/globals.h"
 #include "src/compiler/graph-reducer.h"
 #include "src/compiler/opcodes.h"
-#include "src/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -51,6 +51,7 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   Reduction ReduceJSLoadNamed(Node* node);
   Reduction ReduceJSHasInPrototypeChain(Node* node);
   Reduction ReduceJSOrdinaryHasInstance(Node* node);
+  Reduction ReduceJSHasContextExtension(Node* node);
   Reduction ReduceJSLoadContext(Node* node);
   Reduction ReduceJSStoreContext(Node* node);
   Reduction ReduceJSLoadModule(Node* node);
@@ -81,10 +82,6 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   Reduction ReduceNumberBinop(Node* node);
   Reduction ReduceInt32Binop(Node* node);
   Reduction ReduceUI32Shift(Node* node, Signedness signedness);
-  Reduction ReduceSpeculativeNumberAdd(Node* node);
-  Reduction ReduceSpeculativeNumberMultiply(Node* node);
-  Reduction ReduceSpeculativeNumberBinop(Node* node);
-  Reduction ReduceSpeculativeNumberComparison(Node* node);
   Reduction ReduceObjectIsArray(Node* node);
   Reduction ReduceJSParseInt(Node* node);
   Reduction ReduceJSResolvePromise(Node* node);
@@ -105,7 +102,7 @@ class V8_EXPORT_PRIVATE JSTypedLowering final
   JSHeapBroker* broker_;
   Type empty_string_type_;
   Type pointer_comparable_type_;
-  TypeCache const& type_cache_;
+  TypeCache const* type_cache_;
 };
 
 }  // namespace compiler

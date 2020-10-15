@@ -17,11 +17,11 @@ function TryToLoadModule(filename, expect_error, token) {
   }
 
   import(filename).catch(SetError);
-  %RunMicrotasks();
+  %PerformMicrotaskCheckpoint();
 
   if (expect_error) {
     assertTrue(caught_error instanceof SyntaxError);
-    assertEquals("Unexpected token " + token, caught_error.message);
+    assertEquals("Unexpected token '" + token + "'", caught_error.message);
   } else {
     assertEquals(undefined, caught_error);
   }

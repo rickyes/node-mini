@@ -5,11 +5,12 @@
 #ifndef V8_DEBUG_DEBUG_TYPE_PROFILE_H_
 #define V8_DEBUG_DEBUG_TYPE_PROFILE_H_
 
+#include <memory>
 #include <vector>
 
 #include "src/debug/debug-interface.h"
-#include "src/handles.h"
-#include "src/objects.h"
+#include "src/handles/handles.h"
+#include "src/objects/objects.h"
 
 namespace v8 {
 namespace internal {
@@ -34,7 +35,7 @@ struct TypeProfileScript {
 class TypeProfile : public std::vector<TypeProfileScript> {
  public:
   static std::unique_ptr<TypeProfile> Collect(Isolate* isolate);
-  static void SelectMode(Isolate* isolate, debug::TypeProfile::Mode mode);
+  static void SelectMode(Isolate* isolate, debug::TypeProfileMode mode);
 
  private:
   TypeProfile() = default;

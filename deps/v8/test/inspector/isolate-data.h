@@ -6,13 +6,14 @@
 #define V8_TEST_INSPECTOR_PROTOCOL_ISOLATE_DATA_H_
 
 #include <map>
+#include <memory>
 
 #include "include/v8-inspector.h"
 #include "include/v8-platform.h"
 #include "include/v8.h"
 #include "src/base/macros.h"
 #include "src/base/platform/platform.h"
-#include "src/vector.h"
+#include "src/utils/vector.h"
 
 class TaskRunner;
 
@@ -35,7 +36,9 @@ class IsolateData : public v8_inspector::V8InspectorClient {
 
   // Setting things up.
   int CreateContextGroup();
-  v8::Local<v8::Context> GetContext(int context_group_id);
+  void CreateContext(int context_group_id, v8_inspector::StringView name);
+  void ResetContextGroup(int context_group_id);
+  v8::Local<v8::Context> GetDefaultContext(int context_group_id);
   int GetContextGroupId(v8::Local<v8::Context> context);
   void RegisterModule(v8::Local<v8::Context> context,
                       v8::internal::Vector<uint16_t> name,
@@ -45,7 +48,7 @@ class IsolateData : public v8_inspector::V8InspectorClient {
   int ConnectSession(int context_group_id,
                      const v8_inspector::StringView& state,
                      v8_inspector::V8Inspector::Channel* channel);
-  std::unique_ptr<v8_inspector::StringBuffer> DisconnectSession(int session_id);
+  std::vector<uint8_t> DisconnectSession(int session_id);
   void SendMessage(int session_id, const v8_inspector::StringView& message);
   void BreakProgram(int context_group_id,
                     const v8_inspector::StringView& reason,
@@ -71,9 +74,11 @@ class IsolateData : public v8_inspector::V8InspectorClient {
   void SetMemoryInfo(v8::Local<v8::Value> memory_info);
   void SetLogConsoleApiMessageCalls(bool log);
   void SetLogMaxAsyncCallStackDepthChanged(bool log);
+  void SetAdditionalConsoleApi(v8_inspector::StringView api_script);
   void SetMaxAsyncTaskStacksForTest(int limit);
   void DumpAsyncTaskStacksStateForTest();
-  void FireContextCreated(v8::Local<v8::Context> context, int context_group_id);
+  void FireContextCreated(v8::Local<v8::Context> context, int context_group_id,
+                          v8_inspector::StringView name);
   void FireContextDestroyed(v8::Local<v8::Context> context);
   void FreeContext(v8::Local<v8::Context> context);
   void SetResourceNamePrefix(v8::Local<v8::String> prefix);
@@ -107,6 +112,8 @@ class IsolateData : public v8_inspector::V8InspectorClient {
                                        v8::Local<v8::Context>) override;
   void runMessageLoopOnPause(int context_group_id) override;
   void quitMessageLoopOnPause() override;
+  void installAdditionalCommandLineAPI(v8::Local<v8::Context>,
+                                       v8::Local<v8::Object>) override;
   void consoleAPIMessage(int contextGroupId,
                          v8::Isolate::MessageErrorLevel level,
                          const v8_inspector::StringView& message,
@@ -128,10 +135,11 @@ class IsolateData : public v8_inspector::V8InspectorClient {
 
   TaskRunner* task_runner_;
   SetupGlobalTasks setup_global_tasks_;
+  std::unique_ptr<v8::ArrayBuffer::Allocator> array_buffer_allocator_;
   std::unique_ptr<v8::Isolate, IsolateDeleter> isolate_;
   std::unique_ptr<v8_inspector::V8Inspector> inspector_;
   int last_context_group_id_ = 0;
-  std::map<int, v8::Global<v8::Context>> contexts_;
+  std::map<int, std::vector<v8::Global<v8::Context>>> contexts_;
   std::map<v8::internal::Vector<uint16_t>, v8::Global<v8::Module>,
            VectorCompare>
       modules_;
@@ -145,6 +153,7 @@ class IsolateData : public v8_inspector::V8InspectorClient {
   bool log_max_async_call_stack_depth_changed_ = false;
   v8::Global<v8::Private> not_inspectable_private_;
   v8::Global<v8::String> resource_name_prefix_;
+  v8::Global<v8::String> additional_console_api_;
 
   DISALLOW_COPY_AND_ASSIGN(IsolateData);
 };

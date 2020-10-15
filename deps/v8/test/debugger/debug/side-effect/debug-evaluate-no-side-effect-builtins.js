@@ -45,6 +45,8 @@ function listener(event, exec_state, event_data, data) {
     success(false, `Object.isFrozen({})`);
     success(false, `Object.isSealed({})`);
     success([1, 2], `Object.values({a:1, b:2})`);
+    success(["a", 1, "b", 2], `Object.entries({a:1, b:2}).flat()`);
+    success(["a", "b"], `Object.keys({a:1, b:2})`);
 
     fail(`Object.assign({}, {})`);
     fail(`Object.defineProperties({}, [{p:{value:3}}])`);
@@ -59,6 +61,7 @@ function listener(event, exec_state, event_data, data) {
     success(true, `Object.prototype.isPrototypeOf({})`);
     success(true, `({a:1}).propertyIsEnumerable("a")`);
     success("[object Object]", `({a:1}).toString()`);
+    success("[object Object]", `({a:1}).toLocaleString()`);
     success("string", `(object_with_callbacks).toString()`);
     success(3, `(object_with_callbacks).valueOf()`);
 
@@ -73,8 +76,8 @@ function listener(event, exec_state, event_data, data) {
       "flatMap", "forEach", "every", "some", "reduce", "reduceRight", "find",
       "filter", "map", "findIndex"
     ];
-    var fails = ["toLocaleString", "pop", "push", "reverse", "shift", "unshift",
-      "splice", "sort", "copyWithin", "fill"];
+    var fails = ["pop", "push", "reverse", "shift", "unshift", "splice",
+      "sort", "copyWithin", "fill"];
     for (f of Object.getOwnPropertyNames(Array.prototype)) {
       if (typeof Array.prototype[f] === "function") {
         if (fails.includes(f)) {
@@ -123,8 +126,7 @@ function listener(event, exec_state, event_data, data) {
       "forEach", "every", "some", "reduce", "reduceRight", "find", "filter",
       "map", "findIndex"
     ];
-    fails = ["toString", "join", "toLocaleString", "reverse", "sort",
-      "copyWithin", "fill", "set"];
+    fails = ["reverse", "sort", "copyWithin", "fill", "set"];
     var typed_proto_proto = Object.getPrototypeOf(Object.getPrototypeOf(new Uint8Array()));
     for (f of Object.getOwnPropertyNames(typed_proto_proto)) {
       if (typeof typed_array[f] === "function" && f !== "constructor") {
@@ -144,12 +146,13 @@ function listener(event, exec_state, event_data, data) {
 
     // Test Math functions.
     for (f of Object.getOwnPropertyNames(Math)) {
-      if (typeof Math[f] === "function") {
+      if (f !== "random" && typeof Math[f] === "function") {
         var result = exec_state.frame(0).evaluate(
                          `Math.${f}(0.5, -0.5);`, true).value();
-        if (f != "random") assertEquals(Math[f](0.5, -0.5), result);
+        assertEquals(Math[f](0.5, -0.5), result);
       }
     }
+    fail("Math.random();");
 
     // Test Number functions.
     success(new Number(0), `new Number()`);
@@ -160,7 +163,7 @@ function listener(event, exec_state, event_data, data) {
     }
     for (f of Object.getOwnPropertyNames(Number.prototype)) {
       if (typeof Number.prototype[f] === "function") {
-        if (f == "toLocaleString") continue;
+        if (f == "toLocaleString" && typeof Intl === "undefined") continue;
         success(Number(0.5)[f](5), `Number(0.5).${f}(5);`);
       }
     }
@@ -182,8 +185,9 @@ function listener(event, exec_state, event_data, data) {
         }
         if (f == "normalize") continue;
         if (f == "match") continue;
+        if (f == "matchAll") continue;
         if (f == "search") continue;
-        if (f == "split" || f == "replace") {
+        if (f == "split" || f == "replace" || f == "replaceAll") {
           fail(`'abcd'.${f}(2)`);
           continue;
         }

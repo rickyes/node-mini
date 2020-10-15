@@ -9,7 +9,7 @@
 
 #include "src/base/compiler-specific.h"
 #include "src/base/hashmap.h"
-#include "src/globals.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -29,12 +29,19 @@ class V8_EXPORT_PRIVATE StringsStorage {
   // Returns a formatted string, de-duplicated via the storage.
   PRINTF_FORMAT(2, 3) const char* GetFormatted(const char* format, ...);
   // Returns a stored string resulting from name, or "<symbol>" for a symbol.
-  const char* GetName(Name* name);
+  const char* GetName(Name name);
   // Returns the string representation of the int from the store.
   const char* GetName(int index);
   // Appends string resulting from name to prefix, then returns the stored
   // result.
-  const char* GetConsName(const char* prefix, Name* name);
+  const char* GetConsName(const char* prefix, Name name);
+  // Reduces the refcount of the given string, freeing it if no other
+  // references are made to it.
+  // Returns true if the string was successfully unref'd.
+  bool Release(const char* str);
+
+  // Returns the number of strings in the store.
+  size_t GetStringCountForTesting() const;
 
  private:
   static bool StringsMatch(void* key1, void* key2);

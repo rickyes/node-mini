@@ -4,17 +4,18 @@
 
 #include "src/builtins/builtins-utils-inl.h"
 #include "src/builtins/builtins.h"
-#include "src/conversions.h"
-#include "src/counters.h"
-#include "src/objects-inl.h"
+#include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
+#include "src/logging/counters.h"
+#include "src/numbers/conversions.h"
+#include "src/objects/objects-inl.h"
 #ifdef V8_INTL_SUPPORT
 #include "src/objects/intl-objects.h"
 #endif
 #include "src/regexp/regexp-utils.h"
-#include "src/string-builder-inl.h"
-#include "src/string-case.h"
-#include "src/unicode-inl.h"
-#include "src/unicode.h"
+#include "src/strings/string-builder-inl.h"
+#include "src/strings/string-case.h"
+#include "src/strings/unicode-inl.h"
+#include "src/strings/unicode.h"
 
 namespace v8 {
 namespace internal {
@@ -39,14 +40,16 @@ bool IsValidCodePoint(Isolate* isolate, Handle<Object> value) {
   return true;
 }
 
+static constexpr uc32 kInvalidCodePoint = static_cast<uc32>(-1);
+
 uc32 NextCodePoint(Isolate* isolate, BuiltinArguments args, int index) {
   Handle<Object> value = args.at(1 + index);
-  ASSIGN_RETURN_ON_EXCEPTION_VALUE(isolate, value,
-                                   Object::ToNumber(isolate, value), -1);
+  ASSIGN_RETURN_ON_EXCEPTION_VALUE(
+      isolate, value, Object::ToNumber(isolate, value), kInvalidCodePoint);
   if (!IsValidCodePoint(isolate, value)) {
     isolate->Throw(*isolate->factory()->NewRangeError(
         MessageTemplate::kInvalidCodePoint, value));
-    return -1;
+    return kInvalidCodePoint;
   }
   return DoubleToUint32(value->Number());
 }
@@ -68,7 +71,7 @@ BUILTIN(StringFromCodePoint) {
   int index;
   for (index = 0; index < length; index++) {
     code = NextCodePoint(isolate, args, index);
-    if (code < 0) {
+    if (code == kInvalidCodePoint) {
       return ReadOnlyRoots(isolate).exception();
     }
     if (code > String::kMaxOneByteCharCode) {
@@ -98,7 +101,7 @@ BUILTIN(StringFromCodePoint) {
       break;
     }
     code = NextCodePoint(isolate, args, index);
-    if (code < 0) {
+    if (code == kInvalidCodePoint) {
       return ReadOnlyRoots(isolate).exception();
     }
   }
@@ -109,75 +112,13 @@ BUILTIN(StringFromCodePoint) {
       isolate->factory()->NewRawTwoByteString(
           static_cast<int>(one_byte_buffer.size() + two_byte_buffer.size())));
 
-  CopyChars(result->GetChars(), one_byte_buffer.data(), one_byte_buffer.size());
-  CopyChars(result->GetChars() + one_byte_buffer.size(), two_byte_buffer.data(),
-            two_byte_buffer.size());
+  DisallowHeapAllocation no_gc;
+  CopyChars(result->GetChars(no_gc), one_byte_buffer.data(),
+            one_byte_buffer.size());
+  CopyChars(result->GetChars(no_gc) + one_byte_buffer.size(),
+            two_byte_buffer.data(), two_byte_buffer.size());
 
   return *result;
-}
-
-// ES6 section 21.1.3.6
-// String.prototype.endsWith ( searchString [ , endPosition ] )
-BUILTIN(StringPrototypeEndsWith) {
-  HandleScope handle_scope(isolate);
-  TO_THIS_STRING(str, "String.prototype.endsWith");
-
-  // Check if the search string is a regExp and fail if it is.
-  Handle<Object> search = args.atOrUndefined(isolate, 1);
-  Maybe<bool> is_reg_exp = RegExpUtils::IsRegExp(isolate, search);
-  if (is_reg_exp.IsNothing()) {
-    DCHECK(isolate->has_pending_exception());
-    return ReadOnlyRoots(isolate).exception();
-  }
-  if (is_reg_exp.FromJust()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kFirstArgumentNotRegExp,
-                              isolate->factory()->NewStringFromStaticChars(
-                                  "String.prototype.endsWith")));
-  }
-  Handle<String> search_string;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, search_string,
-                                     Object::ToString(isolate, search));
-
-  Handle<Object> position = args.atOrUndefined(isolate, 2);
-  int end;
-
-  if (position->IsUndefined(isolate)) {
-    end = str->length();
-  } else {
-    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, position,
-                                       Object::ToInteger(isolate, position));
-    end = str->ToValidIndex(*position);
-  }
-
-  int start = end - search_string->length();
-  if (start < 0) return ReadOnlyRoots(isolate).false_value();
-
-  str = String::Flatten(isolate, str);
-  search_string = String::Flatten(isolate, search_string);
-
-  DisallowHeapAllocation no_gc;  // ensure vectors stay valid
-  String::FlatContent str_content = str->GetFlatContent();
-  String::FlatContent search_content = search_string->GetFlatContent();
-
-  if (str_content.IsOneByte() && search_content.IsOneByte()) {
-    Vector<const uint8_t> str_vector = str_content.ToOneByteVector();
-    Vector<const uint8_t> search_vector = search_content.ToOneByteVector();
-
-    return isolate->heap()->ToBoolean(memcmp(str_vector.start() + start,
-                                             search_vector.start(),
-                                             search_string->length()) == 0);
-  }
-
-  FlatStringReader str_reader(isolate, str);
-  FlatStringReader search_reader(isolate, search_string);
-
-  for (int i = 0; i < search_string->length(); i++) {
-    if (str_reader.Get(start + i) != search_reader.Get(i)) {
-      return ReadOnlyRoots(isolate).false_value();
-    }
-  }
-  return ReadOnlyRoots(isolate).true_value();
 }
 
 // ES6 section 21.1.3.9
@@ -197,31 +138,32 @@ BUILTIN(StringPrototypeLocaleCompare) {
   HandleScope handle_scope(isolate);
 
   isolate->CountUsage(v8::Isolate::UseCounterFeature::kStringLocaleCompare);
+  const char* method = "String.prototype.localeCompare";
 
 #ifdef V8_INTL_SUPPORT
-  TO_THIS_STRING(str1, "String.prototype.localeCompare");
+  TO_THIS_STRING(str1, method);
   Handle<String> str2;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
       isolate, str2, Object::ToString(isolate, args.atOrUndefined(isolate, 1)));
   RETURN_RESULT_OR_FAILURE(
-      isolate, Intl::StringLocaleCompare(isolate, str1, str2,
-                                         args.atOrUndefined(isolate, 2),
-                                         args.atOrUndefined(isolate, 3)));
+      isolate, Intl::StringLocaleCompare(
+                   isolate, str1, str2, args.atOrUndefined(isolate, 2),
+                   args.atOrUndefined(isolate, 3), method));
 #else
   DCHECK_EQ(2, args.length());
 
-  TO_THIS_STRING(str1, "String.prototype.localeCompare");
+  TO_THIS_STRING(str1, method);
   Handle<String> str2;
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, str2,
                                      Object::ToString(isolate, args.at(1)));
 
-  if (str1.is_identical_to(str2)) return Smi::kZero;  // Equal.
+  if (str1.is_identical_to(str2)) return Smi::zero();  // Equal.
   int str1_length = str1->length();
   int str2_length = str2->length();
 
   // Decide trivial cases without flattening.
   if (str1_length == 0) {
-    if (str2_length == 0) return Smi::kZero;  // Equal.
+    if (str2_length == 0) return Smi::zero();  // Equal.
     return Smi::FromInt(-str2_length);
   } else {
     if (str2_length == 0) return Smi::FromInt(str1_length);
@@ -239,8 +181,8 @@ BUILTIN(StringPrototypeLocaleCompare) {
   str2 = String::Flatten(isolate, str2);
 
   DisallowHeapAllocation no_gc;
-  String::FlatContent flat1 = str1->GetFlatContent();
-  String::FlatContent flat2 = str2->GetFlatContent();
+  String::FlatContent flat1 = str1->GetFlatContent(no_gc);
+  String::FlatContent flat2 = str2->GetFlatContent(no_gc);
 
   for (int i = 0; i < end; i++) {
     if (flat1.Get(i) != flat2.Get(i)) {
@@ -269,14 +211,10 @@ BUILTIN(StringPrototypeNormalize) {
   ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, form,
                                      Object::ToString(isolate, form_input));
 
-  if (!(String::Equals(isolate, form,
-                       isolate->factory()->NewStringFromStaticChars("NFC")) ||
-        String::Equals(isolate, form,
-                       isolate->factory()->NewStringFromStaticChars("NFD")) ||
-        String::Equals(isolate, form,
-                       isolate->factory()->NewStringFromStaticChars("NFKC")) ||
-        String::Equals(isolate, form,
-                       isolate->factory()->NewStringFromStaticChars("NFKD")))) {
+  if (!(String::Equals(isolate, form, isolate->factory()->NFC_string()) ||
+        String::Equals(isolate, form, isolate->factory()->NFD_string()) ||
+        String::Equals(isolate, form, isolate->factory()->NFKC_string()) ||
+        String::Equals(isolate, form, isolate->factory()->NFKD_string()))) {
     Handle<String> valid_forms =
         isolate->factory()->NewStringFromStaticChars("NFC, NFD, NFKC, NFKD");
     THROW_NEW_ERROR_RETURN_FAILURE(
@@ -288,53 +226,6 @@ BUILTIN(StringPrototypeNormalize) {
 }
 #endif  // !V8_INTL_SUPPORT
 
-BUILTIN(StringPrototypeStartsWith) {
-  HandleScope handle_scope(isolate);
-  TO_THIS_STRING(str, "String.prototype.startsWith");
-
-  // Check if the search string is a regExp and fail if it is.
-  Handle<Object> search = args.atOrUndefined(isolate, 1);
-  Maybe<bool> is_reg_exp = RegExpUtils::IsRegExp(isolate, search);
-  if (is_reg_exp.IsNothing()) {
-    DCHECK(isolate->has_pending_exception());
-    return ReadOnlyRoots(isolate).exception();
-  }
-  if (is_reg_exp.FromJust()) {
-    THROW_NEW_ERROR_RETURN_FAILURE(
-        isolate, NewTypeError(MessageTemplate::kFirstArgumentNotRegExp,
-                              isolate->factory()->NewStringFromStaticChars(
-                                  "String.prototype.startsWith")));
-  }
-  Handle<String> search_string;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, search_string,
-                                     Object::ToString(isolate, search));
-
-  Handle<Object> position = args.atOrUndefined(isolate, 2);
-  int start;
-
-  if (position->IsUndefined(isolate)) {
-    start = 0;
-  } else {
-    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, position,
-                                       Object::ToInteger(isolate, position));
-    start = str->ToValidIndex(*position);
-  }
-
-  if (start + search_string->length() > str->length()) {
-    return ReadOnlyRoots(isolate).false_value();
-  }
-
-  FlatStringReader str_reader(isolate, String::Flatten(isolate, str));
-  FlatStringReader search_reader(isolate,
-                                 String::Flatten(isolate, search_string));
-
-  for (int i = 0; i < search_string->length(); i++) {
-    if (str_reader.Get(start + i) != search_reader.Get(i)) {
-      return ReadOnlyRoots(isolate).false_value();
-    }
-  }
-  return ReadOnlyRoots(isolate).true_value();
-}
 
 #ifndef V8_INTL_SUPPORT
 namespace {
@@ -348,8 +239,8 @@ inline bool ToUpperOverflows(uc32 character) {
 }
 
 template <class Converter>
-V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
-    Isolate* isolate, String* string, SeqString* result, int result_length,
+V8_WARN_UNUSED_RESULT static Object ConvertCaseHelper(
+    Isolate* isolate, String string, SeqString result, int result_length,
     unibrow::Mapping<Converter, 128>* mapping) {
   DisallowHeapAllocation no_gc;
   // We try this twice, once with the assumption that the result is no longer
@@ -369,23 +260,23 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
   unibrow::uchar chars[Converter::kMaxWidth];
   // We can assume that the string is not empty
   uc32 current = stream.GetNext();
-  bool ignore_overflow = Converter::kIsToLower || result->IsSeqTwoByteString();
+  bool ignore_overflow = Converter::kIsToLower || result.IsSeqTwoByteString();
   for (int i = 0; i < result_length;) {
     bool has_next = stream.HasMore();
     uc32 next = has_next ? stream.GetNext() : 0;
     int char_length = mapping->get(current, next, chars);
     if (char_length == 0) {
       // The case conversion of this character is the character itself.
-      result->Set(i, current);
+      result.Set(i, current);
       i++;
     } else if (char_length == 1 &&
                (ignore_overflow || !ToUpperOverflows(current))) {
       // Common case: converting the letter resulted in one character.
       DCHECK(static_cast<uc32>(chars[0]) != current);
-      result->Set(i, chars[0]);
+      result.Set(i, chars[0]);
       has_changed_character = true;
       i++;
-    } else if (result_length == string->length()) {
+    } else if (result_length == string.length()) {
       bool overflows = ToUpperOverflows(current);
       // We've assumed that the result would be as long as the
       // input but here is a character that converts to several
@@ -426,7 +317,7 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
                                              : Smi::FromInt(current_length);
     } else {
       for (int j = 0; j < char_length; j++) {
-        result->Set(i, chars[j]);
+        result.Set(i, chars[j]);
         i++;
       }
       has_changed_character = true;
@@ -445,7 +336,7 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCaseHelper(
 }
 
 template <class Converter>
-V8_WARN_UNUSED_RESULT static Object* ConvertCase(
+V8_WARN_UNUSED_RESULT static Object ConvertCase(
     Handle<String> s, Isolate* isolate,
     unibrow::Mapping<Converter, 128>* mapping) {
   s = String::Flatten(isolate, s);
@@ -459,17 +350,17 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCase(
   // character is also ASCII.  This is currently the case, but it
   // might break in the future if we implement more context and locale
   // dependent upper/lower conversions.
-  if (s->IsOneByteRepresentationUnderneath()) {
+  if (String::IsOneByteRepresentationUnderneath(*s)) {
     // Same length as input.
     Handle<SeqOneByteString> result =
         isolate->factory()->NewRawOneByteString(length).ToHandleChecked();
     DisallowHeapAllocation no_gc;
-    String::FlatContent flat_content = s->GetFlatContent();
+    String::FlatContent flat_content = s->GetFlatContent(no_gc);
     DCHECK(flat_content.IsFlat());
     bool has_changed_character = false;
     int index_to_first_unprocessed = FastAsciiConvert<Converter::kIsToLower>(
-        reinterpret_cast<char*>(result->GetChars()),
-        reinterpret_cast<const char*>(flat_content.ToOneByteVector().start()),
+        reinterpret_cast<char*>(result->GetChars(no_gc)),
+        reinterpret_cast<const char*>(flat_content.ToOneByteVector().begin()),
         length, &has_changed_character);
     // If not ASCII, we discard the result and take the 2 byte path.
     if (index_to_first_unprocessed == length)
@@ -483,10 +374,10 @@ V8_WARN_UNUSED_RESULT static Object* ConvertCase(
     result = isolate->factory()->NewRawTwoByteString(length).ToHandleChecked();
   }
 
-  Object* answer = ConvertCaseHelper(isolate, *s, *result, length, mapping);
-  if (answer->IsException(isolate) || answer->IsString()) return answer;
+  Object answer = ConvertCaseHelper(isolate, *s, *result, length, mapping);
+  if (answer.IsException(isolate) || answer.IsString()) return answer;
 
-  DCHECK(answer->IsSmi());
+  DCHECK(answer.IsSmi());
   length = Smi::ToInt(answer);
   if (s->IsOneByteRepresentation() && length > 0) {
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
@@ -556,7 +447,12 @@ BUILTIN(StringRaw) {
                                      Object::ToLength(isolate, raw_len));
 
   IncrementalStringBuilder result_builder(isolate);
-  const uint32_t length = static_cast<uint32_t>(raw_len->Number());
+  // Intentional spec violation: we ignore {length} values >= 2^32, because
+  // assuming non-empty chunks they would generate too-long strings anyway.
+  const double raw_len_number = raw_len->Number();
+  const uint32_t length = raw_len_number > std::numeric_limits<uint32_t>::max()
+                              ? std::numeric_limits<uint32_t>::max()
+                              : static_cast<uint32_t>(raw_len_number);
   if (length > 0) {
     Handle<Object> first_element;
     ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, first_element,

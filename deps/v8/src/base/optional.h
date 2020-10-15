@@ -131,21 +131,8 @@ struct OptionalStorageBase<T, true /* trivially destructible */> {
 // the condition of constexpr-ness is satisfied because the base class also has
 // compiler generated constexpr {copy,move} constructors). Note that
 // placement-new is prohibited in constexpr.
-#if defined(__GNUC__) && __GNUC__ < 5
-// gcc <5 does not implement std::is_trivially_copy_constructible.
-// Conservatively assume false for this configuration.
-// TODO(clemensh): Remove this once we drop support for gcc <5.
-#define TRIVIALLY_COPY_CONSTRUCTIBLE(T) false
-#define TRIVIALLY_MOVE_CONSTRUCTIBLE(T) false
-#else
-#define TRIVIALLY_COPY_CONSTRUCTIBLE(T) \
-  std::is_trivially_copy_constructible<T>::value
-#define TRIVIALLY_MOVE_CONSTRUCTIBLE(T) \
-  std::is_trivially_move_constructible<T>::value
-#endif
-template <typename T, bool = TRIVIALLY_COPY_CONSTRUCTIBLE(T),
-          bool = TRIVIALLY_MOVE_CONSTRUCTIBLE(T)>
-#undef TRIVIALLY_COPY_CONSTRUCTIBLE
+template <typename T, bool = std::is_trivially_copy_constructible<T>::value,
+          bool = std::is_trivially_move_constructible<T>::value>
 struct OptionalStorage : OptionalStorageBase<T> {
   // This is no trivially {copy,move} constructible case. Other cases are
   // defined below as specializations.
@@ -163,12 +150,11 @@ struct OptionalStorage : OptionalStorageBase<T> {
   // Define it explicitly.
   OptionalStorage() = default;
 
-  OptionalStorage(const OptionalStorage& other) {
+  OptionalStorage(const OptionalStorage& other) V8_NOEXCEPT {
     if (other.is_populated_) Init(other.value_);
   }
 
-  OptionalStorage(OptionalStorage&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value) {
+  OptionalStorage(OptionalStorage&& other) V8_NOEXCEPT {
     if (other.is_populated_) Init(std::move(other.value_));
   }
 };
@@ -183,10 +169,9 @@ struct OptionalStorage<T, true /* trivially copy constructible */,
   using OptionalStorageBase<T>::OptionalStorageBase;
 
   OptionalStorage() = default;
-  OptionalStorage(const OptionalStorage& other) = default;
+  OptionalStorage(const OptionalStorage& other) V8_NOEXCEPT = default;
 
-  OptionalStorage(OptionalStorage&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value) {
+  OptionalStorage(OptionalStorage&& other) V8_NOEXCEPT {
     if (other.is_populated_) Init(std::move(other.value_));
   }
 };
@@ -201,9 +186,9 @@ struct OptionalStorage<T, false /* trivially copy constructible */,
   using OptionalStorageBase<T>::OptionalStorageBase;
 
   OptionalStorage() = default;
-  OptionalStorage(OptionalStorage&& other) = default;
+  OptionalStorage(OptionalStorage&& other) V8_NOEXCEPT = default;
 
-  OptionalStorage(const OptionalStorage& other) {
+  OptionalStorage(const OptionalStorage& other) V8_NOEXCEPT {
     if (other.is_populated_) Init(other.value_);
   }
 };
@@ -227,8 +212,8 @@ class OptionalBase {
   // because of C++ language restriction.
  protected:
   constexpr OptionalBase() = default;
-  constexpr OptionalBase(const OptionalBase& other) = default;
-  constexpr OptionalBase(OptionalBase&& other) = default;
+  constexpr OptionalBase(const OptionalBase& other) V8_NOEXCEPT = default;
+  constexpr OptionalBase(OptionalBase&& other) V8_NOEXCEPT = default;
 
   template <class... Args>
   constexpr explicit OptionalBase(in_place_t, Args&&... args)
@@ -236,26 +221,24 @@ class OptionalBase {
 
   // Implementation of converting constructors.
   template <typename U>
-  explicit OptionalBase(const OptionalBase<U>& other) {
+  explicit OptionalBase(const OptionalBase<U>& other) V8_NOEXCEPT {
     if (other.storage_.is_populated_) storage_.Init(other.storage_.value_);
   }
 
   template <typename U>
-  explicit OptionalBase(OptionalBase<U>&& other) {
+  explicit OptionalBase(OptionalBase<U>&& other) V8_NOEXCEPT {
     if (other.storage_.is_populated_)
       storage_.Init(std::move(other.storage_.value_));
   }
 
   ~OptionalBase() = default;
 
-  OptionalBase& operator=(const OptionalBase& other) {
+  OptionalBase& operator=(const OptionalBase& other) V8_NOEXCEPT {
     CopyAssign(other);
     return *this;
   }
 
-  OptionalBase& operator=(OptionalBase&& other) noexcept(
-      std::is_nothrow_move_assignable<T>::value&&
-          std::is_nothrow_move_constructible<T>::value) {
+  OptionalBase& operator=(OptionalBase&& other) V8_NOEXCEPT {
     MoveAssign(std::move(other));
     return *this;
   }
@@ -308,10 +291,10 @@ struct CopyConstructible {};
 template <>
 struct CopyConstructible<false> {
   constexpr CopyConstructible() = default;
-  constexpr CopyConstructible(const CopyConstructible&) = delete;
-  constexpr CopyConstructible(CopyConstructible&&) = default;
-  CopyConstructible& operator=(const CopyConstructible&) = default;
-  CopyConstructible& operator=(CopyConstructible&&) = default;
+  constexpr CopyConstructible(const CopyConstructible&) V8_NOEXCEPT = delete;
+  constexpr CopyConstructible(CopyConstructible&&) V8_NOEXCEPT = default;
+  CopyConstructible& operator=(const CopyConstructible&) V8_NOEXCEPT = default;
+  CopyConstructible& operator=(CopyConstructible&&) V8_NOEXCEPT = default;
 };
 
 template <bool is_move_constructible>
@@ -320,10 +303,10 @@ struct MoveConstructible {};
 template <>
 struct MoveConstructible<false> {
   constexpr MoveConstructible() = default;
-  constexpr MoveConstructible(const MoveConstructible&) = default;
-  constexpr MoveConstructible(MoveConstructible&&) = delete;
-  MoveConstructible& operator=(const MoveConstructible&) = default;
-  MoveConstructible& operator=(MoveConstructible&&) = default;
+  constexpr MoveConstructible(const MoveConstructible&) V8_NOEXCEPT = default;
+  constexpr MoveConstructible(MoveConstructible&&) V8_NOEXCEPT = delete;
+  MoveConstructible& operator=(const MoveConstructible&) V8_NOEXCEPT = default;
+  MoveConstructible& operator=(MoveConstructible&&) V8_NOEXCEPT = default;
 };
 
 template <bool is_copy_assignable>
@@ -332,10 +315,10 @@ struct CopyAssignable {};
 template <>
 struct CopyAssignable<false> {
   constexpr CopyAssignable() = default;
-  constexpr CopyAssignable(const CopyAssignable&) = default;
-  constexpr CopyAssignable(CopyAssignable&&) = default;
-  CopyAssignable& operator=(const CopyAssignable&) = delete;
-  CopyAssignable& operator=(CopyAssignable&&) = default;
+  constexpr CopyAssignable(const CopyAssignable&) V8_NOEXCEPT = default;
+  constexpr CopyAssignable(CopyAssignable&&) V8_NOEXCEPT = default;
+  CopyAssignable& operator=(const CopyAssignable&) V8_NOEXCEPT = delete;
+  CopyAssignable& operator=(CopyAssignable&&) V8_NOEXCEPT = default;
 };
 
 template <bool is_move_assignable>
@@ -344,10 +327,10 @@ struct MoveAssignable {};
 template <>
 struct MoveAssignable<false> {
   constexpr MoveAssignable() = default;
-  constexpr MoveAssignable(const MoveAssignable&) = default;
-  constexpr MoveAssignable(MoveAssignable&&) = default;
-  MoveAssignable& operator=(const MoveAssignable&) = default;
-  MoveAssignable& operator=(MoveAssignable&&) = delete;
+  constexpr MoveAssignable(const MoveAssignable&) V8_NOEXCEPT = default;
+  constexpr MoveAssignable(MoveAssignable&&) V8_NOEXCEPT = default;
+  MoveAssignable& operator=(const MoveAssignable&) V8_NOEXCEPT = default;
+  MoveAssignable& operator=(MoveAssignable&&) V8_NOEXCEPT = delete;
 };
 
 // Helper to conditionally enable converting constructors and assign operators.
@@ -421,7 +404,7 @@ using RemoveCvRefT =
 // - Constructors do not use 'constexpr' as it is a C++14 extension.
 // - 'constexpr' might be missing in some places for reasons specified locally.
 // - No exceptions are thrown, because they are banned from Chromium.
-//   Marked noexcept for only move constructor and move assign operators.
+//   All copy/move constructors or assignment operators are marked V8_NOEXCEPT.
 // - All the non-members are in the 'base' namespace instead of 'std'.
 //
 // Note that T cannot have a constructor T(Optional<T>) etc. Optional<T> checks
@@ -445,8 +428,8 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
 
   // Defer default/copy/move constructor implementation to OptionalBase.
   constexpr Optional() = default;
-  constexpr Optional(const Optional& other) = default;
-  constexpr Optional(Optional&& other) = default;
+  constexpr Optional(const Optional& other) V8_NOEXCEPT = default;
+  constexpr Optional(Optional&& other) V8_NOEXCEPT = default;
 
   constexpr Optional(nullopt_t) {}  // NOLINT(runtime/explicit)
 
@@ -460,7 +443,8 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                     !internal::IsConvertibleFromOptional<T, U>::value &&
                     std::is_convertible<const U&, T>::value,
                 bool>::type = false>
-  Optional(const Optional<U>& other) : internal::OptionalBase<T>(other) {}
+  Optional(const Optional<U>& other) V8_NOEXCEPT
+      : internal::OptionalBase<T>(other) {}
 
   template <typename U,
             typename std::enable_if<
@@ -468,7 +452,7 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                     !internal::IsConvertibleFromOptional<T, U>::value &&
                     !std::is_convertible<const U&, T>::value,
                 bool>::type = false>
-  explicit Optional(const Optional<U>& other)
+  explicit Optional(const Optional<U>& other) V8_NOEXCEPT
       : internal::OptionalBase<T>(other) {}
 
   // Converting move constructor. Similar to converting copy constructor,
@@ -479,7 +463,8 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                     !internal::IsConvertibleFromOptional<T, U>::value &&
                     std::is_convertible<U&&, T>::value,
                 bool>::type = false>
-  Optional(Optional<U>&& other) : internal::OptionalBase<T>(std::move(other)) {}
+  Optional(Optional<U>&& other) V8_NOEXCEPT
+      : internal::OptionalBase<T>(std::move(other)) {}
 
   template <typename U,
             typename std::enable_if<
@@ -487,7 +472,7 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                     !internal::IsConvertibleFromOptional<T, U>::value &&
                     !std::is_convertible<U&&, T>::value,
                 bool>::type = false>
-  explicit Optional(Optional<U>&& other)
+  explicit Optional(Optional<U>&& other) V8_NOEXCEPT
       : internal::OptionalBase<T>(std::move(other)) {}
 
   template <class... Args>
@@ -528,8 +513,8 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
   ~Optional() = default;
 
   // Defer copy-/move- assign operator implementation to OptionalBase.
-  Optional& operator=(const Optional& other) = default;
-  Optional& operator=(Optional&& other) = default;
+  Optional& operator=(const Optional& other) V8_NOEXCEPT = default;
+  Optional& operator=(Optional&& other) V8_NOEXCEPT = default;
 
   Optional& operator=(nullopt_t) {
     FreeIfNeeded();
@@ -545,7 +530,7 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
           (!std::is_scalar<T>::value ||
            !std::is_same<typename std::decay<U>::type, T>::value),
       Optional&>::type
-  operator=(U&& value) {
+  operator=(U&& value) V8_NOEXCEPT {
     InitOrAssign(std::forward<U>(value));
     return *this;
   }
@@ -556,7 +541,7 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                               std::is_constructible<T, const U&>::value &&
                               std::is_assignable<T&, const U&>::value,
                           Optional&>::type
-  operator=(const Optional<U>& other) {
+  operator=(const Optional<U>& other) V8_NOEXCEPT {
     CopyAssign(other);
     return *this;
   }
@@ -567,38 +552,38 @@ class OPTIONAL_DECLSPEC_EMPTY_BASES Optional
                               std::is_constructible<T, U>::value &&
                               std::is_assignable<T&, U>::value,
                           Optional&>::type
-  operator=(Optional<U>&& other) {
+  operator=(Optional<U>&& other) V8_NOEXCEPT {
     MoveAssign(std::move(other));
     return *this;
   }
 
-  const T* operator->() const {
-    DCHECK(storage_.is_populated_);
+  constexpr const T* operator->() const {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return &storage_.value_;
   }
 
-  T* operator->() {
-    DCHECK(storage_.is_populated_);
+  constexpr T* operator->() {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return &storage_.value_;
   }
 
-  const T& operator*() const & {
-    DCHECK(storage_.is_populated_);
+  constexpr const T& operator*() const& {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return storage_.value_;
   }
 
-  T& operator*() & {
-    DCHECK(storage_.is_populated_);
+  constexpr T& operator*() & {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return storage_.value_;
   }
 
-  const T&& operator*() const && {
-    DCHECK(storage_.is_populated_);
+  constexpr const T&& operator*() const&& {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return std::move(storage_.value_);
   }
 
-  T&& operator*() && {
-    DCHECK(storage_.is_populated_);
+  constexpr T&& operator*() && {
+    CONSTEXPR_DCHECK(storage_.is_populated_);
     return std::move(storage_.value_);
   }
 

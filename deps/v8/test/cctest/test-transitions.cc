@@ -5,15 +5,15 @@
 #include <stdlib.h>
 #include <utility>
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
-#include "src/compilation-cache.h"
-#include "src/execution.h"
-#include "src/field-type.h"
-#include "src/global-handles.h"
+#include "src/codegen/compilation-cache.h"
+#include "src/execution/execution.h"
+#include "src/handles/global-handles.h"
 #include "src/heap/factory.h"
-#include "src/objects-inl.h"
-#include "src/transitions.h"
+#include "src/objects/field-type.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/transitions-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-transitions.h"
 
@@ -32,16 +32,14 @@ TEST(TransitionArray_SimpleFieldTransitions) {
 
   Handle<Map> map0 = Map::Create(isolate, 0);
   Handle<Map> map1 =
-      Map::CopyWithField(isolate, map0, name1,
-                         handle(FieldType::Any(), isolate), attributes,
-                         PropertyConstness::kMutable, Representation::Tagged(),
-                         OMIT_TRANSITION)
+      Map::CopyWithField(isolate, map0, name1, FieldType::Any(isolate),
+                         attributes, PropertyConstness::kMutable,
+                         Representation::Tagged(), OMIT_TRANSITION)
           .ToHandleChecked();
   Handle<Map> map2 =
-      Map::CopyWithField(isolate, map0, name2,
-                         handle(FieldType::Any(), isolate), attributes,
-                         PropertyConstness::kMutable, Representation::Tagged(),
-                         OMIT_TRANSITION)
+      Map::CopyWithField(isolate, map0, name2, FieldType::Any(isolate),
+                         attributes, PropertyConstness::kMutable,
+                         Representation::Tagged(), OMIT_TRANSITION)
           .ToHandleChecked();
 
   CHECK(map0->raw_transitions()->IsSmi());
@@ -68,8 +66,8 @@ TEST(TransitionArray_SimpleFieldTransitions) {
     CHECK_EQ(*map2, transitions.SearchTransition(*name2, kData, attributes));
     CHECK_EQ(2, transitions.NumberOfTransitions());
     for (int i = 0; i < 2; i++) {
-      Name* key = transitions.GetKey(i);
-      Map* target = transitions.GetTarget(i);
+      Name key = transitions.GetKey(i);
+      Map target = transitions.GetTarget(i);
       CHECK((key == *name1 && target == *map1) ||
             (key == *name2 && target == *map2));
     }
@@ -91,16 +89,14 @@ TEST(TransitionArray_FullFieldTransitions) {
 
   Handle<Map> map0 = Map::Create(isolate, 0);
   Handle<Map> map1 =
-      Map::CopyWithField(isolate, map0, name1,
-                         handle(FieldType::Any(), isolate), attributes,
-                         PropertyConstness::kMutable, Representation::Tagged(),
-                         OMIT_TRANSITION)
+      Map::CopyWithField(isolate, map0, name1, FieldType::Any(isolate),
+                         attributes, PropertyConstness::kMutable,
+                         Representation::Tagged(), OMIT_TRANSITION)
           .ToHandleChecked();
   Handle<Map> map2 =
-      Map::CopyWithField(isolate, map0, name2,
-                         handle(FieldType::Any(), isolate), attributes,
-                         PropertyConstness::kMutable, Representation::Tagged(),
-                         OMIT_TRANSITION)
+      Map::CopyWithField(isolate, map0, name2, FieldType::Any(isolate),
+                         attributes, PropertyConstness::kMutable,
+                         Representation::Tagged(), OMIT_TRANSITION)
           .ToHandleChecked();
 
   CHECK(map0->raw_transitions()->IsSmi());
@@ -127,8 +123,8 @@ TEST(TransitionArray_FullFieldTransitions) {
     CHECK_EQ(*map2, transitions.SearchTransition(*name2, kData, attributes));
     CHECK_EQ(2, transitions.NumberOfTransitions());
     for (int i = 0; i < 2; i++) {
-      Name* key = transitions.GetKey(i);
-      Map* target = transitions.GetTarget(i);
+      Name key = transitions.GetKey(i);
+      Map target = transitions.GetTarget(i);
       CHECK((key == *name1 && target == *map1) ||
             (key == *name2 && target == *map2));
     }
@@ -155,11 +151,10 @@ TEST(TransitionArray_DifferentFieldNames) {
   for (int i = 0; i < PROPS_COUNT; i++) {
     EmbeddedVector<char, 64> buffer;
     SNPrintF(buffer, "prop%d", i);
-    Handle<String> name = factory->InternalizeUtf8String(buffer.start());
+    Handle<String> name = factory->InternalizeUtf8String(buffer.begin());
     Handle<Map> map =
-        Map::CopyWithField(isolate, map0, name,
-                           handle(FieldType::Any(), isolate), attributes,
-                           PropertyConstness::kMutable,
+        Map::CopyWithField(isolate, map0, name, FieldType::Any(isolate),
+                           attributes, PropertyConstness::kMutable,
                            Representation::Tagged(), OMIT_TRANSITION)
             .ToHandleChecked();
     names[i] = name;
@@ -174,8 +169,8 @@ TEST(TransitionArray_DifferentFieldNames) {
              transitions.SearchTransition(*names[i], kData, attributes));
   }
   for (int i = 0; i < PROPS_COUNT; i++) {
-    Name* key = transitions.GetKey(i);
-    Map* target = transitions.GetTarget(i);
+    Name key = transitions.GetKey(i);
+    Map target = transitions.GetTarget(i);
     for (int j = 0; j < PROPS_COUNT; j++) {
       if (*names[i] == key) {
         CHECK_EQ(*maps[i], target);
@@ -248,10 +243,9 @@ TEST(TransitionArray_SameFieldNamesDifferentAttributes) {
   for (int i = 0; i < PROPS_COUNT; i++) {
     EmbeddedVector<char, 64> buffer;
     SNPrintF(buffer, "prop%d", i);
-    Handle<String> name = factory->InternalizeUtf8String(buffer.start());
+    Handle<String> name = factory->InternalizeUtf8String(buffer.begin());
     Handle<Map> map =
-        Map::CopyWithField(isolate, map0, name,
-                           handle(FieldType::Any(), isolate), NONE,
+        Map::CopyWithField(isolate, map0, name, FieldType::Any(isolate), NONE,
                            PropertyConstness::kMutable,
                            Representation::Tagged(), OMIT_TRANSITION)
             .ToHandleChecked();
@@ -271,9 +265,8 @@ TEST(TransitionArray_SameFieldNamesDifferentAttributes) {
     PropertyAttributes attributes = static_cast<PropertyAttributes>(i);
 
     Handle<Map> map =
-        Map::CopyWithField(isolate, map0, name,
-                           handle(FieldType::Any(), isolate), attributes,
-                           PropertyConstness::kMutable,
+        Map::CopyWithField(isolate, map0, name, FieldType::Any(isolate),
+                           attributes, PropertyConstness::kMutable,
                            Representation::Tagged(), OMIT_TRANSITION)
             .ToHandleChecked();
     attr_maps[i] = map;
@@ -291,12 +284,12 @@ TEST(TransitionArray_SameFieldNamesDifferentAttributes) {
   // Ensure that info about the other fields still valid.
   CHECK_EQ(PROPS_COUNT + ATTRS_COUNT, transitions.NumberOfTransitions());
   for (int i = 0; i < PROPS_COUNT + ATTRS_COUNT; i++) {
-    Name* key = transitions.GetKey(i);
-    Map* target = transitions.GetTarget(i);
+    Name key = transitions.GetKey(i);
+    Map target = transitions.GetTarget(i);
     if (key == *name) {
       // Attributes transition.
       PropertyAttributes attributes =
-          target->GetLastDescriptorDetails().attributes();
+          target.GetLastDescriptorDetails(isolate).attributes();
       CHECK_EQ(*attr_maps[static_cast<int>(attributes)], target);
     } else {
       for (int j = 0; j < PROPS_COUNT; j++) {

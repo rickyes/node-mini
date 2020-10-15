@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stdlib.h>
+#include <algorithm>
 
 #include "src/base/iterator.h"
-#include "src/globals.h"
-#include "src/utils.h"
+#include "src/common/globals.h"
+#include "src/utils/memcopy.h"
 #include "src/zone/zone.h"
 
 #ifndef V8_ZONE_ZONE_CHUNK_LIST_H_
@@ -119,8 +119,8 @@ class ZoneChunkList : public ZoneObject {
   };
 
   Chunk* NewChunk(const uint32_t capacity) {
-    Chunk* chunk =
-        new (zone_->New(sizeof(Chunk) + capacity * sizeof(T))) Chunk();
+    void* memory = zone_->Allocate<Chunk>(sizeof(Chunk) + capacity * sizeof(T));
+    Chunk* chunk = new (memory) Chunk();
     chunk->capacity_ = capacity;
     return chunk;
   }
@@ -301,7 +301,8 @@ void ZoneChunkList<T>::push_back(const T& item) {
   DCHECK_LE(back_->position_, back_->capacity_);
   if (back_->position_ == back_->capacity_) {
     if (back_->next_ == nullptr) {
-      Chunk* chunk = NewChunk(Min(back_->capacity_ << 1, kMaxChunkCapacity));
+      constexpr auto max_capacity = kMaxChunkCapacity;
+      Chunk* chunk = NewChunk(std::min(back_->capacity_ << 1, max_capacity));
       back_->next_ = chunk;
       chunk->previous_ = back_;
     }

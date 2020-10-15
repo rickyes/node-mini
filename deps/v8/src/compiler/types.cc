@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <iomanip>
-
 #include "src/compiler/types.h"
 
-#include "src/handles-inl.h"
-#include "src/objects-inl.h"
-#include "src/ostreams.h"
+#include <iomanip>
+
+#include "src/handles/handles-inl.h"
+#include "src/objects/instance-type.h"
+#include "src/objects/objects-inl.h"
+#include "src/utils/ostreams.h"
 
 namespace v8 {
 namespace internal {
@@ -145,19 +146,15 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case SLICED_ONE_BYTE_STRING_TYPE:
     case EXTERNAL_STRING_TYPE:
     case EXTERNAL_ONE_BYTE_STRING_TYPE:
-    case EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_STRING_TYPE:
     case UNCACHED_EXTERNAL_ONE_BYTE_STRING_TYPE:
-    case UNCACHED_EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case STRING_TYPE:
     case ONE_BYTE_STRING_TYPE:
       return kString;
     case EXTERNAL_INTERNALIZED_STRING_TYPE:
     case EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case UNCACHED_EXTERNAL_INTERNALIZED_STRING_TYPE:
     case UNCACHED_EXTERNAL_ONE_BYTE_INTERNALIZED_STRING_TYPE:
-    case UNCACHED_EXTERNAL_INTERNALIZED_STRING_WITH_ONE_BYTE_DATA_TYPE:
     case INTERNALIZED_STRING_TYPE:
     case ONE_BYTE_INTERNALIZED_STRING_TYPE:
       return kInternalizedString;
@@ -186,7 +183,7 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case HEAP_NUMBER_TYPE:
       return kNumber;
     case JS_OBJECT_TYPE:
-    case JS_ARGUMENTS_TYPE:
+    case JS_ARGUMENTS_OBJECT_TYPE:
     case JS_ERROR_TYPE:
     case JS_GLOBAL_OBJECT_TYPE:
     case JS_GLOBAL_PROXY_TYPE:
@@ -206,20 +203,22 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
       return kOtherObject;
     case JS_ARRAY_TYPE:
       return kArray;
-    case JS_VALUE_TYPE:
+    case JS_PRIMITIVE_WRAPPER_TYPE:
     case JS_MESSAGE_OBJECT_TYPE:
     case JS_DATE_TYPE:
 #ifdef V8_INTL_SUPPORT
-    case JS_INTL_V8_BREAK_ITERATOR_TYPE:
-    case JS_INTL_COLLATOR_TYPE:
-    case JS_INTL_DATE_TIME_FORMAT_TYPE:
-    case JS_INTL_LIST_FORMAT_TYPE:
-    case JS_INTL_LOCALE_TYPE:
-    case JS_INTL_NUMBER_FORMAT_TYPE:
-    case JS_INTL_PLURAL_RULES_TYPE:
-    case JS_INTL_RELATIVE_TIME_FORMAT_TYPE:
-    case JS_INTL_SEGMENT_ITERATOR_TYPE:
-    case JS_INTL_SEGMENTER_TYPE:
+    case JS_V8_BREAK_ITERATOR_TYPE:
+    case JS_COLLATOR_TYPE:
+    case JS_DATE_TIME_FORMAT_TYPE:
+    case JS_DISPLAY_NAMES_TYPE:
+    case JS_LIST_FORMAT_TYPE:
+    case JS_LOCALE_TYPE:
+    case JS_NUMBER_FORMAT_TYPE:
+    case JS_PLURAL_RULES_TYPE:
+    case JS_RELATIVE_TIME_FORMAT_TYPE:
+    case JS_SEGMENT_ITERATOR_TYPE:
+    case JS_SEGMENTER_TYPE:
+    case JS_SEGMENTS_TYPE:
 #endif  // V8_INTL_SUPPORT
     case JS_CONTEXT_EXTENSION_OBJECT_TYPE:
     case JS_GENERATOR_OBJECT_TYPE:
@@ -228,8 +227,8 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case JS_MODULE_NAMESPACE_TYPE:
     case JS_ARRAY_BUFFER_TYPE:
     case JS_ARRAY_ITERATOR_TYPE:
-    case JS_REGEXP_TYPE:  // TODO(rossberg): there should be a RegExp type.
-    case JS_REGEXP_STRING_ITERATOR_TYPE:
+    case JS_REG_EXP_TYPE:
+    case JS_REG_EXP_STRING_ITERATOR_TYPE:
     case JS_TYPED_ARRAY_TYPE:
     case JS_DATA_VIEW_TYPE:
     case JS_SET_TYPE:
@@ -241,18 +240,20 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case JS_MAP_VALUE_ITERATOR_TYPE:
     case JS_STRING_ITERATOR_TYPE:
     case JS_ASYNC_FROM_SYNC_ITERATOR_TYPE:
-    case JS_WEAK_CELL_TYPE:
-    case JS_WEAK_FACTORY_TYPE:
-    case JS_WEAK_FACTORY_CLEANUP_ITERATOR_TYPE:
+    case JS_FINALIZATION_REGISTRY_TYPE:
     case JS_WEAK_MAP_TYPE:
+    case JS_WEAK_REF_TYPE:
     case JS_WEAK_SET_TYPE:
     case JS_PROMISE_TYPE:
-    case WASM_EXCEPTION_TYPE:
-    case WASM_GLOBAL_TYPE:
-    case WASM_INSTANCE_TYPE:
-    case WASM_MEMORY_TYPE:
-    case WASM_MODULE_TYPE:
-    case WASM_TABLE_TYPE:
+    case WASM_ARRAY_TYPE:
+    case WASM_EXCEPTION_OBJECT_TYPE:
+    case WASM_GLOBAL_OBJECT_TYPE:
+    case WASM_INSTANCE_OBJECT_TYPE:
+    case WASM_MEMORY_OBJECT_TYPE:
+    case WASM_MODULE_OBJECT_TYPE:
+    case WASM_STRUCT_TYPE:
+    case WASM_TABLE_OBJECT_TYPE:
+    case WEAK_CELL_TYPE:
       DCHECK(!map.is_callable());
       DCHECK(!map.is_undetectable());
       return kOtherObject;
@@ -271,16 +272,19 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case ACCESSOR_INFO_TYPE:
     case SHARED_FUNCTION_INFO_TYPE:
     case FUNCTION_TEMPLATE_INFO_TYPE:
+    case FUNCTION_TEMPLATE_RARE_DATA_TYPE:
     case ACCESSOR_PAIR_TYPE:
+    case EMBEDDER_DATA_ARRAY_TYPE:
     case FIXED_ARRAY_TYPE:
+    case PROPERTY_DESCRIPTOR_OBJECT_TYPE:
     case HASH_TABLE_TYPE:
     case ORDERED_HASH_MAP_TYPE:
     case ORDERED_HASH_SET_TYPE:
+    case ORDERED_NAME_DICTIONARY_TYPE:
     case NAME_DICTIONARY_TYPE:
     case GLOBAL_DICTIONARY_TYPE:
     case NUMBER_DICTIONARY_TYPE:
     case SIMPLE_NUMBER_DICTIONARY_TYPE:
-    case STRING_TABLE_TYPE:
     case EPHEMERON_HASH_TABLE_TYPE:
     case WEAK_FIXED_ARRAY_TYPE:
     case WEAK_ARRAY_LIST_TYPE:
@@ -291,8 +295,10 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case OBJECT_BOILERPLATE_DESCRIPTION_TYPE:
     case ARRAY_BOILERPLATE_DESCRIPTION_TYPE:
     case DESCRIPTOR_ARRAY_TYPE:
+    case STRONG_DESCRIPTOR_ARRAY_TYPE:
     case TRANSITION_ARRAY_TYPE:
     case FEEDBACK_CELL_TYPE:
+    case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
     case FEEDBACK_VECTOR_TYPE:
     case PROPERTY_ARRAY_TYPE:
     case FOREIGN_TYPE:
@@ -311,26 +317,23 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case SCRIPT_TYPE:
     case CODE_TYPE:
     case PROPERTY_CELL_TYPE:
-    case MODULE_TYPE:
-    case MODULE_INFO_ENTRY_TYPE:
-    case MICROTASK_QUEUE_TYPE:
+    case SOURCE_TEXT_MODULE_TYPE:
+    case SOURCE_TEXT_MODULE_INFO_ENTRY_TYPE:
+    case SYNTHETIC_MODULE_TYPE:
     case CELL_TYPE:
-    case PRE_PARSED_SCOPE_DATA_TYPE:
-    case UNCOMPILED_DATA_WITHOUT_PRE_PARSED_SCOPE_TYPE:
-    case UNCOMPILED_DATA_WITH_PRE_PARSED_SCOPE_TYPE:
+    case PREPARSE_DATA_TYPE:
+    case UNCOMPILED_DATA_WITHOUT_PREPARSE_DATA_TYPE:
+    case UNCOMPILED_DATA_WITH_PREPARSE_DATA_TYPE:
+    case COVERAGE_INFO_TYPE:
+    case WASM_TYPE_INFO_TYPE:
       return kOtherInternal;
 
     // Remaining instance types are unsupported for now. If any of them do
     // require bit set types, they should get kOtherInternal.
-    case MUTABLE_HEAP_NUMBER_TYPE:
     case FREE_SPACE_TYPE:
-#define FIXED_TYPED_ARRAY_CASE(Type, type, TYPE, ctype) \
-  case FIXED_##TYPE##_ARRAY_TYPE:
-
-      TYPED_ARRAYS(FIXED_TYPED_ARRAY_CASE)
-#undef FIXED_TYPED_ARRAY_CASE
     case FILLER_TYPE:
     case ACCESS_CHECK_INFO_TYPE:
+    case ASM_WASM_DATA_TYPE:
     case CALL_HANDLER_INFO_TYPE:
     case INTERCEPTOR_INFO_TYPE:
     case OBJECT_TEMPLATE_INFO_TYPE:
@@ -338,16 +341,27 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case ALIASED_ARGUMENTS_ENTRY_TYPE:
     case PROMISE_CAPABILITY_TYPE:
     case PROMISE_REACTION_TYPE:
+    case CLASS_POSITIONS_TYPE:
     case DEBUG_INFO_TYPE:
     case STACK_FRAME_INFO_TYPE:
+    case STACK_TRACE_FRAME_TYPE:
     case SMALL_ORDERED_HASH_MAP_TYPE:
     case SMALL_ORDERED_HASH_SET_TYPE:
+    case SMALL_ORDERED_NAME_DICTIONARY_TYPE:
     case PROTOTYPE_INFO_TYPE:
     case INTERPRETER_DATA_TYPE:
+    case TEMPLATE_OBJECT_DESCRIPTION_TYPE:
     case TUPLE2_TYPE:
-    case TUPLE3_TYPE:
-    case WASM_DEBUG_INFO_TYPE:
+    case BREAK_POINT_TYPE:
+    case BREAK_POINT_INFO_TYPE:
+    case WASM_VALUE_TYPE:
+    case CACHED_TEMPLATE_OBJECT_TYPE:
+    case ENUM_CACHE_TYPE:
+    case WASM_CAPI_FUNCTION_DATA_TYPE:
+    case WASM_INDIRECT_FUNCTION_TABLE_TYPE:
+    case WASM_EXCEPTION_TAG_TYPE:
     case WASM_EXPORTED_FUNCTION_DATA_TYPE:
+    case WASM_JS_FUNCTION_DATA_TYPE:
     case LOAD_HANDLER_TYPE:
     case STORE_HANDLER_TYPE:
     case ASYNC_GENERATOR_REQUEST_TYPE:
@@ -357,6 +371,9 @@ Type::bitset BitsetType::Lub(const MapRefLike& map) {
     case PROMISE_FULFILL_REACTION_JOB_TASK_TYPE:
     case PROMISE_REJECT_REACTION_JOB_TASK_TYPE:
     case PROMISE_RESOLVE_THENABLE_JOB_TASK_TYPE:
+#define MAKE_TORQUE_CLASS_TYPE(INSTANCE_TYPE, Name, name) case INSTANCE_TYPE:
+      TORQUE_DEFINED_INSTANCE_TYPE_LIST(MAKE_TORQUE_CLASS_TYPE)
+#undef MAKE_TORQUE_CLASS_TYPE
       UNREACHABLE();
   }
   UNREACHABLE();
@@ -550,7 +567,7 @@ bool Type::SlowIs(Type that) const {
   }
 
   if (that.IsRange()) {
-    return (this->IsRange() && Contains(that.AsRange(), this->AsRange()));
+    return this->IsRange() && Contains(that.AsRange(), this->AsRange());
   }
   if (this->IsRange()) return false;
 
@@ -827,7 +844,7 @@ Type Type::NormalizeRangeAndBitset(Type range, bitset* bits, Zone* zone) {
   return Type::Range(range_min, range_max, zone);
 }
 
-Type Type::NewConstant(double value, Zone* zone) {
+Type Type::Constant(double value, Zone* zone) {
   if (RangeType::IsInteger(value)) {
     return Range(value, value, zone);
   } else if (IsMinusZero(value)) {
@@ -840,14 +857,13 @@ Type Type::NewConstant(double value, Zone* zone) {
   return OtherNumberConstant(value, zone);
 }
 
-Type Type::NewConstant(JSHeapBroker* broker, Handle<i::Object> value,
-                       Zone* zone) {
+Type Type::Constant(JSHeapBroker* broker, Handle<i::Object> value, Zone* zone) {
   ObjectRef ref(broker, value);
   if (ref.IsSmi()) {
-    return NewConstant(static_cast<double>(ref.AsSmi()), zone);
+    return Constant(static_cast<double>(ref.AsSmi()), zone);
   }
   if (ref.IsHeapNumber()) {
-    return NewConstant(ref.AsHeapNumber().value(), zone);
+    return Constant(ref.AsHeapNumber().value(), zone);
   }
   if (ref.IsString() && !ref.IsInternalizedString()) {
     return Type::String();
@@ -1012,7 +1028,7 @@ void Type::PrintTo(std::ostream& os) const {
   if (this->IsBitset()) {
     BitsetType::Print(os, this->AsBitset());
   } else if (this->IsHeapConstant()) {
-    os << "HeapConstant(" << Brief(*this->AsHeapConstant()->Value()) << ")";
+    os << "HeapConstant(" << this->AsHeapConstant()->Ref() << ")";
   } else if (this->IsOtherNumberConstant()) {
     os << "OtherNumberConstant(" << this->AsOtherNumberConstant()->Value()
        << ")";
@@ -1080,15 +1096,12 @@ Type Type::OtherNumberConstant(double value, Zone* zone) {
 }
 
 // static
-Type Type::HeapConstant(JSHeapBroker* broker, Handle<i::Object> value,
-                        Zone* zone) {
-  return FromTypeBase(
-      HeapConstantType::New(HeapObjectRef(broker, value), zone));
-}
-
-// static
 Type Type::HeapConstant(const HeapObjectRef& value, Zone* zone) {
-  return HeapConstantType::New(value, zone);
+  DCHECK(!value.IsHeapNumber());
+  DCHECK_IMPLIES(value.IsString(), value.IsInternalizedString());
+  BitsetType::bitset bitset = BitsetType::Lub(value.GetHeapObjectType());
+  if (Type(bitset).IsSingleton()) return Type(bitset);
+  return HeapConstantType::New(value, bitset, zone);
 }
 
 // static
@@ -1099,11 +1112,6 @@ Type Type::Range(double min, double max, Zone* zone) {
 // static
 Type Type::Range(RangeType::Limits lims, Zone* zone) {
   return FromTypeBase(RangeType::New(lims, zone));
-}
-
-// static
-Type Type::Union(int length, Zone* zone) {
-  return FromTypeBase(UnionType::New(length, zone));
 }
 
 const HeapConstantType* Type::AsHeapConstant() const {

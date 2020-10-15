@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --experimental-wasm-mut-global --expose-gc
+// Flags: --expose-gc
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 (function TestBasic() {
@@ -12,7 +11,7 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
   let builder = new WasmModuleBuilder();
   builder.addImportedGlobal("mod", "g", kWasmI32);
   builder.addFunction("main", kSig_i_v)
-    .addBody([kExprGetGlobal, 0])
+    .addBody([kExprGlobalGet, 0])
     .exportAs("main");
 
   let main = builder.instantiate({mod: {g: global}}).exports.main;
@@ -55,10 +54,10 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
 
 function addGlobalGetterAndSetter(builder, index, name, type) {
   builder.addFunction('get' + name, makeSig([], [type]))
-      .addBody([kExprGetGlobal, index])
+      .addBody([kExprGlobalGet, index])
       .exportFunc();
   builder.addFunction('set' + name, makeSig([type], []))
-      .addBody([kExprGetLocal, 0, kExprSetGlobal, index])
+      .addBody([kExprLocalGet, 0, kExprGlobalSet, index])
       .exportFunc();
 }
 
@@ -138,20 +137,20 @@ function addGlobalGetterAndSetter(builder, index, name, type) {
     const index = 0;
     builder.addFunction('geti64_hi', makeSig([], [kWasmI32]))
       .addBody([
-        kExprGetGlobal, index,
+        kExprGlobalGet, index,
         kExprI64Const, 32, kExprI64ShrU,
         kExprI32ConvertI64])
       .exportFunc();
     builder.addFunction('geti64_lo', makeSig([], [kWasmI32]))
-      .addBody([kExprGetGlobal, index, kExprI32ConvertI64])
+      .addBody([kExprGlobalGet, index, kExprI32ConvertI64])
       .exportFunc();
     builder.addFunction("seti64", makeSig([kWasmI32, kWasmI32], []))
       .addBody([
-        kExprGetLocal, 1, kExprI64UConvertI32,
-        kExprGetLocal, 0, kExprI64UConvertI32,
+        kExprLocalGet, 1, kExprI64UConvertI32,
+        kExprLocalGet, 0, kExprI64UConvertI32,
         kExprI64Const, 32, kExprI64Shl,
         kExprI64Ior,
-        kExprSetGlobal, index])
+        kExprGlobalSet, index])
       .exportFunc();
   };
 

@@ -5,22 +5,25 @@
 #include <stdlib.h>
 #include <utility>
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
-#include "src/accessors.h"
-#include "src/api-inl.h"
-#include "src/compilation-cache.h"
-#include "src/execution.h"
-#include "src/field-type.h"
-#include "src/global-handles.h"
+#include "src/api/api-inl.h"
+#include "src/base/overflowing-math.h"
+#include "src/builtins/accessors.h"
+#include "src/codegen/compilation-cache.h"
+#include "src/execution/execution.h"
+#include "src/handles/global-handles.h"
 #include "src/heap/factory.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/spaces.h"
 #include "src/ic/ic.h"
-#include "src/layout-descriptor.h"
-#include "src/objects-inl.h"
 #include "src/objects/api-callbacks.h"
-#include "src/property.h"
+#include "src/objects/field-type.h"
+#include "src/objects/heap-number-inl.h"
+#include "src/objects/layout-descriptor.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/property.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 
@@ -35,28 +38,12 @@ namespace test_unboxed_doubles {
 // Helper functions.
 //
 
-
 static void InitializeVerifiedMapDescriptors(
-    Map* map, DescriptorArray* descriptors,
-    LayoutDescriptor* layout_descriptor) {
-  map->InitializeDescriptors(descriptors, layout_descriptor);
-  CHECK(layout_descriptor->IsConsistentWithMap(map, true));
+    Isolate* isolate, Map map, DescriptorArray descriptors,
+    LayoutDescriptor layout_descriptor) {
+  map.InitializeDescriptors(isolate, descriptors, layout_descriptor);
+  CHECK(layout_descriptor.IsConsistentWithMap(map, true));
 }
-
-
-static Handle<String> MakeString(const char* str) {
-  Isolate* isolate = CcTest::i_isolate();
-  Factory* factory = isolate->factory();
-  return factory->InternalizeUtf8String(str);
-}
-
-
-static Handle<String> MakeName(const char* str, int suffix) {
-  EmbeddedVector<char, 128> buffer;
-  SNPrintF(buffer, "%s%d", str, suffix);
-  return MakeString(buffer.start());
-}
-
 
 Handle<JSObject> GetObject(const char* name) {
   return Handle<JSObject>::cast(
@@ -67,21 +54,21 @@ Handle<JSObject> GetObject(const char* name) {
               .ToLocalChecked())));
 }
 
-
-static double GetDoubleFieldValue(JSObject* obj, FieldIndex field_index) {
-  if (obj->IsUnboxedDoubleField(field_index)) {
-    return obj->RawFastDoublePropertyAt(field_index);
+static double GetDoubleFieldValue(JSObject obj, FieldIndex field_index) {
+  if (obj.IsUnboxedDoubleField(field_index)) {
+    return obj.RawFastDoublePropertyAt(field_index);
   } else {
-    Object* value = obj->RawFastPropertyAt(field_index);
-    CHECK(value->IsMutableHeapNumber());
-    return MutableHeapNumber::cast(value)->value();
+    Object value = obj.RawFastPropertyAt(field_index);
+    CHECK(value.IsHeapNumber());
+    return HeapNumber::cast(value).value();
   }
 }
 
-void WriteToField(JSObject* object, int descriptor, Object* value) {
-  DescriptorArray* descriptors = object->map()->instance_descriptors();
-  PropertyDetails details = descriptors->GetDetails(descriptor);
-  object->WriteToField(descriptor, details, value);
+void WriteToField(JSObject object, int index, Object value) {
+  DescriptorArray descriptors = object.map().instance_descriptors(kRelaxedLoad);
+  InternalIndex descriptor(index);
+  PropertyDetails details = descriptors.GetDetails(descriptor);
+  object.WriteToField(descriptor, details, value);
 }
 
 const int kNumberOfBits = 32;
@@ -112,7 +99,7 @@ static Handle<DescriptorArray> CreateDescriptorArray(Isolate* isolate,
   for (int i = 0; i < kPropsCount; i++) {
     EmbeddedVector<char, 64> buffer;
     SNPrintF(buffer, "prop%d", i);
-    Handle<String> name = factory->InternalizeUtf8String(buffer.start());
+    Handle<String> name = factory->InternalizeUtf8String(buffer.begin());
 
     TestPropertyKind kind = props[i];
 
@@ -140,34 +127,34 @@ TEST(LayoutDescriptorBasicFast) {
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
 
-  LayoutDescriptor* layout_desc = LayoutDescriptor::FastPointerLayout();
+  LayoutDescriptor layout_desc = LayoutDescriptor::FastPointerLayout();
 
-  CHECK(!layout_desc->IsSlowLayout());
-  CHECK(layout_desc->IsFastPointerLayout());
-  CHECK_EQ(kBitsInSmiLayout, layout_desc->capacity());
+  CHECK(!layout_desc.IsSlowLayout());
+  CHECK(layout_desc.IsFastPointerLayout());
+  CHECK_EQ(kBitsInSmiLayout, layout_desc.capacity());
 
   for (int i = 0; i < kBitsInSmiLayout + 13; i++) {
-    CHECK(layout_desc->IsTagged(i));
+    CHECK(layout_desc.IsTagged(i));
   }
-  CHECK(layout_desc->IsTagged(-1));
-  CHECK(layout_desc->IsTagged(-12347));
-  CHECK(layout_desc->IsTagged(15635));
-  CHECK(layout_desc->IsFastPointerLayout());
+  CHECK(layout_desc.IsTagged(-1));
+  CHECK(layout_desc.IsTagged(-12347));
+  CHECK(layout_desc.IsTagged(15635));
+  CHECK(layout_desc.IsFastPointerLayout());
 
   for (int i = 0; i < kBitsInSmiLayout; i++) {
-    layout_desc = layout_desc->SetTaggedForTesting(i, false);
-    CHECK(!layout_desc->IsTagged(i));
-    layout_desc = layout_desc->SetTaggedForTesting(i, true);
-    CHECK(layout_desc->IsTagged(i));
+    layout_desc = layout_desc.SetTaggedForTesting(i, false);
+    CHECK(!layout_desc.IsTagged(i));
+    layout_desc = layout_desc.SetTaggedForTesting(i, true);
+    CHECK(layout_desc.IsTagged(i));
   }
-  CHECK(layout_desc->IsFastPointerLayout());
+  CHECK(layout_desc.IsFastPointerLayout());
 
   int sequence_length;
-  CHECK_EQ(true, layout_desc->IsTagged(0, std::numeric_limits<int>::max(),
-                                       &sequence_length));
+  CHECK_EQ(true, layout_desc.IsTagged(0, std::numeric_limits<int>::max(),
+                                      &sequence_length));
   CHECK_EQ(std::numeric_limits<int>::max(), sequence_length);
 
-  CHECK(layout_desc->IsTagged(0, 7, &sequence_length));
+  CHECK(layout_desc.IsTagged(0, 7, &sequence_length));
   CHECK_EQ(7, sequence_length);
 }
 
@@ -195,7 +182,8 @@ TEST(LayoutDescriptorBasicSlow) {
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
     CHECK_EQ(LayoutDescriptor::FastPointerLayout(), *layout_descriptor);
     CHECK_EQ(kBitsInSmiLayout, layout_descriptor->capacity());
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   props[0] = PROP_DOUBLE;
@@ -219,7 +207,8 @@ TEST(LayoutDescriptorBasicSlow) {
     for (int i = 1; i < kPropsCount; i++) {
       CHECK(layout_descriptor->IsTagged(i));
     }
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -239,23 +228,24 @@ TEST(LayoutDescriptorBasicSlow) {
       CHECK(layout_descriptor->IsTagged(i));
     }
 
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
 
     // Here we have truly slow layout descriptor, so play with the bits.
     CHECK(layout_descriptor->IsTagged(-1));
     CHECK(layout_descriptor->IsTagged(-12347));
     CHECK(layout_descriptor->IsTagged(15635));
 
-    LayoutDescriptor* layout_desc = *layout_descriptor;
+    LayoutDescriptor layout_desc = *layout_descriptor;
     // Play with the bits but leave it in consistent state with map at the end.
     for (int i = 1; i < kPropsCount - 1; i++) {
-      layout_desc = layout_desc->SetTaggedForTesting(i, false);
-      CHECK(!layout_desc->IsTagged(i));
-      layout_desc = layout_desc->SetTaggedForTesting(i, true);
-      CHECK(layout_desc->IsTagged(i));
+      layout_desc = layout_desc.SetTaggedForTesting(i, false);
+      CHECK(!layout_desc.IsTagged(i));
+      layout_desc = layout_desc.SetTaggedForTesting(i, true);
+      CHECK(layout_desc.IsTagged(i));
     }
-    CHECK(layout_desc->IsSlowLayout());
-    CHECK(!layout_desc->IsFastPointerLayout());
+    CHECK(layout_desc.IsSlowLayout());
+    CHECK(!layout_desc.IsFastPointerLayout());
     CHECK(layout_descriptor->IsConsistentWithMap(*map, true));
   }
 }
@@ -267,7 +257,7 @@ static void TestLayoutDescriptorQueries(int layout_descriptor_length,
   Handle<LayoutDescriptor> layout_descriptor = LayoutDescriptor::NewForTesting(
       CcTest::i_isolate(), layout_descriptor_length);
   layout_descriptor_length = layout_descriptor->capacity();
-  LayoutDescriptor* layout_desc = *layout_descriptor;
+  LayoutDescriptor layout_desc = *layout_descriptor;
 
   {
     // Fill in the layout descriptor.
@@ -279,11 +269,11 @@ static void TestLayoutDescriptorQueries(int layout_descriptor_length,
         ++cur_bit_flip_index;
         CHECK(i < bit_flip_positions[cur_bit_flip_index]);  // check test data
       }
-      layout_desc = layout_desc->SetTaggedForTesting(i, tagged);
+      layout_desc = layout_desc.SetTaggedForTesting(i, tagged);
     }
   }
 
-  if (layout_desc->IsFastPointerLayout()) {
+  if (layout_desc.IsFastPointerLayout()) {
     return;
   }
 
@@ -296,30 +286,29 @@ static void TestLayoutDescriptorQueries(int layout_descriptor_length,
         tagged = !tagged;
         ++cur_bit_flip_index;
       }
-      CHECK_EQ(tagged, layout_desc->IsTagged(i));
+      CHECK_EQ(tagged, layout_desc.IsTagged(i));
 
       int next_bit_flip_position = bit_flip_positions[cur_bit_flip_index];
       int expected_sequence_length;
-      if (next_bit_flip_position < layout_desc->capacity()) {
+      if (next_bit_flip_position < layout_desc.capacity()) {
         expected_sequence_length = next_bit_flip_position - i;
       } else {
         expected_sequence_length = tagged ? std::numeric_limits<int>::max()
-                                          : (layout_desc->capacity() - i);
+                                          : (layout_desc.capacity() - i);
       }
       expected_sequence_length =
           Min(expected_sequence_length, max_sequence_length);
       int sequence_length;
       CHECK_EQ(tagged,
-               layout_desc->IsTagged(i, max_sequence_length, &sequence_length));
+               layout_desc.IsTagged(i, max_sequence_length, &sequence_length));
       CHECK_GT(sequence_length, 0);
 
       CHECK_EQ(expected_sequence_length, sequence_length);
     }
 
     int sequence_length;
-    CHECK_EQ(true,
-             layout_desc->IsTagged(layout_descriptor_length,
-                                   max_sequence_length, &sequence_length));
+    CHECK_EQ(true, layout_desc.IsTagged(layout_descriptor_length,
+                                        max_sequence_length, &sequence_length));
     CHECK_EQ(max_sequence_length, sequence_length);
   }
 }
@@ -327,11 +316,11 @@ static void TestLayoutDescriptorQueries(int layout_descriptor_length,
 
 static void TestLayoutDescriptorQueriesFast(int max_sequence_length) {
   {
-    LayoutDescriptor* layout_desc = LayoutDescriptor::FastPointerLayout();
+    LayoutDescriptor layout_desc = LayoutDescriptor::FastPointerLayout();
     int sequence_length;
     for (int i = 0; i < kNumberOfBits; i++) {
       CHECK_EQ(true,
-               layout_desc->IsTagged(i, max_sequence_length, &sequence_length));
+               layout_desc.IsTagged(i, max_sequence_length, &sequence_length));
       CHECK_GT(sequence_length, 0);
       CHECK_EQ(max_sequence_length, sequence_length);
     }
@@ -439,7 +428,7 @@ static void TestLayoutDescriptorQueriesSlow(int max_sequence_length) {
     int cur = 0;
     for (int i = 0; i < kMaxNumberOfDescriptors; i++) {
       bit_flip_positions[i] = cur;
-      cur = (cur + 1) * 2;
+      cur = base::MulWithWraparound((cur + 1), 2);
     }
     CHECK_LT(cur, 10000);
     bit_flip_positions[kMaxNumberOfDescriptors] = 10000;
@@ -452,7 +441,7 @@ static void TestLayoutDescriptorQueriesSlow(int max_sequence_length) {
     int cur = 3;
     for (int i = 0; i < kMaxNumberOfDescriptors; i++) {
       bit_flip_positions[i] = cur;
-      cur = (cur + 1) * 2;
+      cur = base::MulWithWraparound((cur + 1), 2);
     }
     CHECK_LT(cur, 10000);
     bit_flip_positions[kMaxNumberOfDescriptors] = 10000;
@@ -519,7 +508,8 @@ TEST(LayoutDescriptorCreateNewFast) {
     layout_descriptor =
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
     CHECK_EQ(LayoutDescriptor::FastPointerLayout(), *layout_descriptor);
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -527,7 +517,8 @@ TEST(LayoutDescriptorCreateNewFast) {
     layout_descriptor =
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
     CHECK_EQ(LayoutDescriptor::FastPointerLayout(), *layout_descriptor);
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -540,7 +531,8 @@ TEST(LayoutDescriptorCreateNewFast) {
     CHECK(!layout_descriptor->IsTagged(1));
     CHECK(layout_descriptor->IsTagged(2));
     CHECK(layout_descriptor->IsTagged(125));
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 }
 
@@ -565,7 +557,8 @@ TEST(LayoutDescriptorCreateNewSlow) {
     layout_descriptor =
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
     CHECK_EQ(LayoutDescriptor::FastPointerLayout(), *layout_descriptor);
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -573,7 +566,8 @@ TEST(LayoutDescriptorCreateNewSlow) {
     layout_descriptor =
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
     CHECK_EQ(LayoutDescriptor::FastPointerLayout(), *layout_descriptor);
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -586,7 +580,8 @@ TEST(LayoutDescriptorCreateNewSlow) {
     CHECK(!layout_descriptor->IsTagged(1));
     CHECK(layout_descriptor->IsTagged(2));
     CHECK(layout_descriptor->IsTagged(125));
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
   }
 
   {
@@ -605,26 +600,27 @@ TEST(LayoutDescriptorCreateNewSlow) {
     for (int i = inobject_properties; i < kPropsCount; i++) {
       CHECK(layout_descriptor->IsTagged(i));
     }
-    InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+    InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                     *layout_descriptor);
 
     // Now test LayoutDescriptor::cast_gc_safe().
     Handle<LayoutDescriptor> layout_descriptor_copy =
         LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
 
-    LayoutDescriptor* layout_desc = *layout_descriptor;
+    LayoutDescriptor layout_desc = *layout_descriptor;
     CHECK_EQ(layout_desc, LayoutDescriptor::cast(layout_desc));
     CHECK_EQ(layout_desc, LayoutDescriptor::cast_gc_safe(layout_desc));
-    CHECK(layout_desc->IsSlowLayout());
+    CHECK(layout_desc.IsSlowLayout());
     // Now make it look like a forwarding pointer to layout_descriptor_copy.
-    MapWord map_word = layout_desc->map_word();
+    MapWord map_word = layout_desc.map_word();
     CHECK(!map_word.IsForwardingAddress());
-    layout_desc->set_map_word(
+    layout_desc.set_map_word(
         MapWord::FromForwardingAddress(*layout_descriptor_copy));
-    CHECK(layout_desc->map_word().IsForwardingAddress());
+    CHECK(layout_desc.map_word().IsForwardingAddress());
     CHECK_EQ(layout_desc, LayoutDescriptor::cast_gc_safe(layout_desc));
 
     // Restore it back.
-    layout_desc->set_map_word(map_word);
+    layout_desc.set_map_word(map_word);
     CHECK_EQ(layout_desc, LayoutDescriptor::cast(layout_desc));
   }
 }
@@ -639,14 +635,14 @@ static Handle<LayoutDescriptor> TestLayoutDescriptorAppend(
       DescriptorArray::Allocate(isolate, 0, kPropsCount);
 
   Handle<Map> map = Map::Create(isolate, inobject_properties);
-  map->InitializeDescriptors(*descriptors,
+  map->InitializeDescriptors(isolate, *descriptors,
                              LayoutDescriptor::FastPointerLayout());
 
   int next_field_offset = 0;
   for (int i = 0; i < kPropsCount; i++) {
     EmbeddedVector<char, 64> buffer;
     SNPrintF(buffer, "prop%d", i);
-    Handle<String> name = factory->InternalizeUtf8String(buffer.start());
+    Handle<String> name = factory->InternalizeUtf8String(buffer.begin());
 
     Handle<LayoutDescriptor> layout_descriptor;
     TestPropertyKind kind = props[i];
@@ -675,9 +671,10 @@ static Handle<LayoutDescriptor> TestLayoutDescriptorAppend(
       }
       CHECK(layout_descriptor->IsTagged(next_field_offset));
     }
-    map->InitializeDescriptors(*descriptors, *layout_descriptor);
+    map->InitializeDescriptors(isolate, *descriptors, *layout_descriptor);
   }
-  Handle<LayoutDescriptor> layout_descriptor(map->layout_descriptor(), isolate);
+  Handle<LayoutDescriptor> layout_descriptor(
+      map->layout_descriptor(kAcquireLoad), isolate);
   CHECK(layout_descriptor->IsConsistentWithMap(*map, true));
   return layout_descriptor;
 }
@@ -788,13 +785,13 @@ static Handle<LayoutDescriptor> TestLayoutDescriptorAppendIfFastOrUseFull(
   std::vector<Handle<Map>> maps(descriptors_length);
   {
     CHECK(last_map->is_stable());
-    Map* map = *last_map;
+    Map map = *last_map;
     for (int i = 0; i < descriptors_length; i++) {
       maps[descriptors_length - 1 - i] = handle(map, isolate);
-      Object* maybe_map = map->GetBackPointer();
-      CHECK(maybe_map->IsMap());
+      Object maybe_map = map.GetBackPointer();
+      CHECK(maybe_map.IsMap());
       map = Map::cast(maybe_map);
-      CHECK(!map->is_stable());
+      CHECK(!map.is_stable());
     }
     CHECK_EQ(1, maps[0]->NumberOfOwnDescriptors());
   }
@@ -802,11 +799,11 @@ static Handle<LayoutDescriptor> TestLayoutDescriptorAppendIfFastOrUseFull(
   Handle<Map> map;
   // Now check layout descriptors of all intermediate maps.
   for (int i = 0; i < number_of_descriptors; i++) {
-    PropertyDetails details = descriptors->GetDetails(i);
+    PropertyDetails details = descriptors->GetDetails(InternalIndex(i));
     map = maps[i];
-    LayoutDescriptor* layout_desc = map->layout_descriptor();
+    LayoutDescriptor layout_desc = map->layout_descriptor(kAcquireLoad);
 
-    if (layout_desc->IsSlowLayout()) {
+    if (layout_desc.IsSlowLayout()) {
       switched_to_slow_mode = true;
       CHECK_EQ(*full_layout_descriptor, layout_desc);
     } else {
@@ -819,12 +816,12 @@ static Handle<LayoutDescriptor> TestLayoutDescriptorAppendIfFastOrUseFull(
         bool is_inobject = field_index < map->GetInObjectProperties();
         for (int bit = 0; bit < field_width_in_words; bit++) {
           CHECK_EQ(is_inobject && details.representation().IsDouble(),
-                   !layout_desc->IsTagged(field_index + bit));
+                   !layout_desc.IsTagged(field_index + bit));
         }
-        CHECK(layout_desc->IsTagged(field_index + field_width_in_words));
+        CHECK(layout_desc.IsTagged(field_index + field_width_in_words));
       }
     }
-    CHECK(map->layout_descriptor()->IsConsistentWithMap(*map));
+    CHECK(map->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map));
   }
 
   Handle<LayoutDescriptor> layout_descriptor(map->GetLayoutDescriptor(),
@@ -943,28 +940,29 @@ TEST(Regress436816) {
   Handle<Map> map = Map::Create(isolate, kPropsCount);
   Handle<LayoutDescriptor> layout_descriptor =
       LayoutDescriptor::New(isolate, map, descriptors, kPropsCount);
-  map->InitializeDescriptors(*descriptors, *layout_descriptor);
+  map->InitializeDescriptors(isolate, *descriptors, *layout_descriptor);
 
-  Handle<JSObject> object = factory->NewJSObjectFromMap(map, TENURED);
+  Handle<JSObject> object =
+      factory->NewJSObjectFromMap(map, AllocationType::kOld);
 
   Address fake_address = static_cast<Address>(~kHeapObjectTagMask);
-  HeapObject* fake_object = HeapObject::FromAddress(fake_address);
-  CHECK(fake_object->IsHeapObject());
+  HeapObject fake_object = HeapObject::FromAddress(fake_address);
+  CHECK(fake_object.IsHeapObject());
 
   uint64_t boom_value = bit_cast<uint64_t>(fake_object);
-  for (int i = 0; i < kPropsCount; i++) {
+  for (InternalIndex i : InternalIndex::Range(kPropsCount)) {
     FieldIndex index = FieldIndex::ForDescriptor(*map, i);
     CHECK(map->IsUnboxedDoubleField(index));
     object->RawFastDoublePropertyAsBitsAtPut(index, boom_value);
   }
   CHECK(object->HasFastProperties());
-  CHECK(!object->map()->HasFastPointerLayout());
+  CHECK(!object->map().HasFastPointerLayout());
 
   Handle<Map> normalized_map =
       Map::Normalize(isolate, map, KEEP_INOBJECT_PROPERTIES, "testing");
-  JSObject::MigrateToMap(object, normalized_map);
+  JSObject::MigrateToMap(isolate, object, normalized_map);
   CHECK(!object->HasFastProperties());
-  CHECK(object->map()->HasFastPointerLayout());
+  CHECK(object->map().HasFastPointerLayout());
 
   // Trigger GCs and heap verification.
   CcTest::CollectAllGarbage();
@@ -984,19 +982,20 @@ TEST(DescriptorArrayTrimming) {
   Handle<FieldType> any_type = FieldType::Any(isolate);
   Handle<Map> map = Map::Create(isolate, kFieldCount);
   for (int i = 0; i < kSplitFieldIndex; i++) {
-    map = Map::CopyWithField(isolate, map, MakeName("prop", i), any_type, NONE,
-                             PropertyConstness::kMutable, Representation::Smi(),
-                             INSERT_TRANSITION)
+    map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", i),
+                             any_type, NONE, PropertyConstness::kMutable,
+                             Representation::Smi(), INSERT_TRANSITION)
               .ToHandleChecked();
   }
-  map = Map::CopyWithField(isolate, map, MakeName("dbl", kSplitFieldIndex),
-                           any_type, NONE, PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map,
+                           CcTest::MakeName("dbl", kSplitFieldIndex), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Double(), INSERT_TRANSITION)
             .ToHandleChecked();
-  CHECK(map->layout_descriptor()->IsConsistentWithMap(*map, true));
-  CHECK(map->layout_descriptor()->IsSlowLayout());
+  CHECK(map->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map, true));
+  CHECK(map->layout_descriptor(kAcquireLoad).IsSlowLayout());
   CHECK(map->owns_descriptors());
-  CHECK_EQ(8, map->layout_descriptor()->length());
+  CHECK_EQ(8, map->layout_descriptor(kAcquireLoad).length());
 
   {
     // Add transitions to double fields.
@@ -1004,39 +1003,42 @@ TEST(DescriptorArrayTrimming) {
 
     Handle<Map> tmp_map = map;
     for (int i = kSplitFieldIndex + 1; i < kFieldCount; i++) {
-      tmp_map = Map::CopyWithField(isolate, tmp_map, MakeName("dbl", i),
+      tmp_map = Map::CopyWithField(isolate, tmp_map, CcTest::MakeName("dbl", i),
                                    any_type, NONE, PropertyConstness::kMutable,
                                    Representation::Double(), INSERT_TRANSITION)
                     .ToHandleChecked();
-      CHECK(tmp_map->layout_descriptor()->IsConsistentWithMap(*tmp_map, true));
+      CHECK(tmp_map->layout_descriptor(kAcquireLoad)
+                .IsConsistentWithMap(*tmp_map, true));
     }
     // Check that descriptors are shared.
     CHECK(tmp_map->owns_descriptors());
-    CHECK_EQ(map->instance_descriptors(), tmp_map->instance_descriptors());
-    CHECK_EQ(map->layout_descriptor(), tmp_map->layout_descriptor());
+    CHECK_EQ(map->instance_descriptors(kRelaxedLoad),
+             tmp_map->instance_descriptors(kRelaxedLoad));
+    CHECK_EQ(map->layout_descriptor(kAcquireLoad),
+             tmp_map->layout_descriptor(kAcquireLoad));
   }
-  CHECK(map->layout_descriptor()->IsSlowLayout());
-  CHECK_EQ(16, map->layout_descriptor()->length());
+  CHECK(map->layout_descriptor(kAcquireLoad).IsSlowLayout());
+  CHECK_EQ(16, map->layout_descriptor(kAcquireLoad).length());
 
   // The unused tail of the layout descriptor is now "durty" because of sharing.
-  CHECK(map->layout_descriptor()->IsConsistentWithMap(*map));
+  CHECK(map->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map));
   for (int i = kSplitFieldIndex + 1; i < kTrimmedLayoutDescriptorLength; i++) {
-    CHECK(!map->layout_descriptor()->IsTagged(i));
+    CHECK(!map->layout_descriptor(kAcquireLoad).IsTagged(i));
   }
   CHECK_LT(map->NumberOfOwnDescriptors(),
-           map->instance_descriptors()->number_of_descriptors());
+           map->instance_descriptors(kRelaxedLoad).number_of_descriptors());
 
   // Call GC that should trim both |map|'s descriptor array and layout
   // descriptor.
   CcTest::CollectAllGarbage();
 
   // The unused tail of the layout descriptor is now "clean" again.
-  CHECK(map->layout_descriptor()->IsConsistentWithMap(*map, true));
+  CHECK(map->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map, true));
   CHECK(map->owns_descriptors());
   CHECK_EQ(map->NumberOfOwnDescriptors(),
-           map->instance_descriptors()->number_of_descriptors());
-  CHECK(map->layout_descriptor()->IsSlowLayout());
-  CHECK_EQ(8, map->layout_descriptor()->length());
+           map->instance_descriptors(kRelaxedLoad).number_of_descriptors());
+  CHECK(map->layout_descriptor(kAcquireLoad).IsSlowLayout());
+  CHECK_EQ(8, map->layout_descriptor(kAcquireLoad).length());
 
   {
     // Add transitions to tagged fields.
@@ -1044,22 +1046,26 @@ TEST(DescriptorArrayTrimming) {
 
     Handle<Map> tmp_map = map;
     for (int i = kSplitFieldIndex + 1; i < kFieldCount - 1; i++) {
-      tmp_map = Map::CopyWithField(isolate, tmp_map, MakeName("tagged", i),
-                                   any_type, NONE, PropertyConstness::kMutable,
-                                   Representation::Tagged(), INSERT_TRANSITION)
-                    .ToHandleChecked();
-      CHECK(tmp_map->layout_descriptor()->IsConsistentWithMap(*tmp_map, true));
+      tmp_map =
+          Map::CopyWithField(isolate, tmp_map, CcTest::MakeName("tagged", i),
+                             any_type, NONE, PropertyConstness::kMutable,
+                             Representation::Tagged(), INSERT_TRANSITION)
+              .ToHandleChecked();
+      CHECK(tmp_map->layout_descriptor(kAcquireLoad)
+                .IsConsistentWithMap(*tmp_map, true));
     }
-    tmp_map = Map::CopyWithField(isolate, tmp_map, MakeString("dbl"), any_type,
-                                 NONE, PropertyConstness::kMutable,
+    tmp_map = Map::CopyWithField(isolate, tmp_map, CcTest::MakeString("dbl"),
+                                 any_type, NONE, PropertyConstness::kMutable,
                                  Representation::Double(), INSERT_TRANSITION)
                   .ToHandleChecked();
-    CHECK(tmp_map->layout_descriptor()->IsConsistentWithMap(*tmp_map, true));
+    CHECK(tmp_map->layout_descriptor(kAcquireLoad)
+              .IsConsistentWithMap(*tmp_map, true));
     // Check that descriptors are shared.
     CHECK(tmp_map->owns_descriptors());
-    CHECK_EQ(map->instance_descriptors(), tmp_map->instance_descriptors());
+    CHECK_EQ(map->instance_descriptors(kRelaxedLoad),
+             tmp_map->instance_descriptors(kRelaxedLoad));
   }
-  CHECK(map->layout_descriptor()->IsSlowLayout());
+  CHECK(map->layout_descriptor(kAcquireLoad).IsSlowLayout());
 }
 
 
@@ -1076,20 +1082,21 @@ TEST(DoScavenge) {
 
   Handle<FieldType> any_type = FieldType::Any(isolate);
   Handle<Map> map = Map::Create(isolate, 10);
-  map = Map::CopyWithField(isolate, map, MakeName("prop", 0), any_type, NONE,
-                           PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", 0), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Double(), INSERT_TRANSITION)
             .ToHandleChecked();
 
   // Create object in new space.
-  Handle<JSObject> obj = factory->NewJSObjectFromMap(map, NOT_TENURED);
+  Handle<JSObject> obj =
+      factory->NewJSObjectFromMap(map, AllocationType::kYoung);
 
   Handle<HeapNumber> heap_number = factory->NewHeapNumber(42.5);
   WriteToField(*obj, 0, *heap_number);
 
   {
     // Ensure the object is properly set up.
-    FieldIndex field_index = FieldIndex::ForDescriptor(*map, 0);
+    FieldIndex field_index = FieldIndex::ForDescriptor(*map, InternalIndex(0));
     CHECK(field_index.is_inobject() && field_index.is_double());
     CHECK_EQ(FLAG_unbox_double_fields, map->IsUnboxedDoubleField(field_index));
     CHECK_EQ(42.5, GetDoubleFieldValue(*obj, field_index));
@@ -1105,11 +1112,12 @@ TEST(DoScavenge) {
 
   // Construct a double value that looks like a pointer to the new space object
   // and store it into the obj.
-  Address fake_object = reinterpret_cast<Address>(*temp) + kPointerSize;
+  Address fake_object = temp->ptr() + kSystemPointerSize;
   double boom_value = bit_cast<double>(fake_object);
 
-  FieldIndex field_index = FieldIndex::ForDescriptor(obj->map(), 0);
-  auto boom_number = factory->NewMutableHeapNumber(boom_value);
+  FieldIndex field_index =
+      FieldIndex::ForDescriptor(obj->map(), InternalIndex(0));
+  auto boom_number = factory->NewHeapNumber(boom_value);
   obj->FastPropertyAtPut(field_index, *boom_number);
 
   // Now |obj| moves to old gen and it has a double field that looks like
@@ -1140,12 +1148,12 @@ TEST(DoScavengeWithIncrementalWriteBarrier) {
 
   Handle<FieldType> any_type = FieldType::Any(isolate);
   Handle<Map> map = Map::Create(isolate, 10);
-  map = Map::CopyWithField(isolate, map, MakeName("prop", 0), any_type, NONE,
-                           PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", 0), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Double(), INSERT_TRANSITION)
             .ToHandleChecked();
-  map = Map::CopyWithField(isolate, map, MakeName("prop", 1), any_type, NONE,
-                           PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", 1), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Tagged(), INSERT_TRANSITION)
             .ToHandleChecked();
 
@@ -1156,12 +1164,14 @@ TEST(DoScavengeWithIncrementalWriteBarrier) {
     AlwaysAllocateScope always_allocate(isolate);
     // Make sure |obj_value| is placed on an old-space evacuation candidate.
     heap::SimulateFullSpace(old_space);
-    obj_value = factory->NewJSArray(32 * KB, HOLEY_ELEMENTS, TENURED);
-    ec_page = Page::FromAddress(obj_value->address());
+    obj_value =
+        factory->NewJSArray(32 * KB, HOLEY_ELEMENTS, AllocationType::kOld);
+    ec_page = Page::FromHeapObject(*obj_value);
   }
 
   // Create object in new space.
-  Handle<JSObject> obj = factory->NewJSObjectFromMap(map, NOT_TENURED);
+  Handle<JSObject> obj =
+      factory->NewJSObjectFromMap(map, AllocationType::kYoung);
 
   Handle<HeapNumber> heap_number = factory->NewHeapNumber(42.5);
   WriteToField(*obj, 0, *heap_number);
@@ -1169,12 +1179,12 @@ TEST(DoScavengeWithIncrementalWriteBarrier) {
 
   {
     // Ensure the object is properly set up.
-    FieldIndex field_index = FieldIndex::ForDescriptor(*map, 0);
+    FieldIndex field_index = FieldIndex::ForDescriptor(*map, InternalIndex(0));
     CHECK(field_index.is_inobject() && field_index.is_double());
     CHECK_EQ(FLAG_unbox_double_fields, map->IsUnboxedDoubleField(field_index));
     CHECK_EQ(42.5, GetDoubleFieldValue(*obj, field_index));
 
-    field_index = FieldIndex::ForDescriptor(*map, 1);
+    field_index = FieldIndex::ForDescriptor(*map, InternalIndex(1));
     CHECK(field_index.is_inobject() && !field_index.is_double());
     CHECK(!map->IsUnboxedDoubleField(field_index));
   }
@@ -1212,7 +1222,7 @@ TEST(DoScavengeWithIncrementalWriteBarrier) {
   // |obj_value| must be evacuated.
   CHECK(!MarkCompactCollector::IsOnEvacuationCandidate(*obj_value));
 
-  FieldIndex field_index = FieldIndex::ForDescriptor(*map, 1);
+  FieldIndex field_index = FieldIndex::ForDescriptor(*map, InternalIndex(1));
   CHECK_EQ(*obj_value, obj->RawFastPropertyAt(field_index));
 }
 
@@ -1225,7 +1235,8 @@ static void TestLayoutDescriptorHelper(Isolate* isolate,
 
   Handle<LayoutDescriptor> layout_descriptor = LayoutDescriptor::New(
       isolate, map, descriptors, descriptors->number_of_descriptors());
-  InitializeVerifiedMapDescriptors(*map, *descriptors, *layout_descriptor);
+  InitializeVerifiedMapDescriptors(isolate, *map, *descriptors,
+                                   *layout_descriptor);
 
   LayoutDescriptorHelper helper(*map);
   bool all_fields_tagged = true;
@@ -1234,7 +1245,7 @@ static void TestLayoutDescriptorHelper(Isolate* isolate,
 
   int end_offset = instance_size * 2;
   int first_non_tagged_field_offset = end_offset;
-  for (int i = 0; i < number_of_descriptors; i++) {
+  for (InternalIndex i : InternalIndex::Range(number_of_descriptors)) {
     PropertyDetails details = descriptors->GetDetails(i);
     if (details.location() != kField) continue;
     FieldIndex index = FieldIndex::ForDescriptor(*map, i);
@@ -1251,11 +1262,11 @@ static void TestLayoutDescriptorHelper(Isolate* isolate,
     CHECK_EQ(expected_tagged, helper.IsTagged(index.offset(), instance_size,
                                               &end_of_region_offset));
     CHECK_GT(end_of_region_offset, 0);
-    CHECK_EQ(end_of_region_offset % kPointerSize, 0);
+    CHECK_EQ(end_of_region_offset % kTaggedSize, 0);
     CHECK(end_of_region_offset <= instance_size);
 
     for (int offset = index.offset(); offset < end_of_region_offset;
-         offset += kPointerSize) {
+         offset += kTaggedSize) {
       CHECK_EQ(expected_tagged, helper.IsTagged(index.offset()));
     }
     if (end_of_region_offset < instance_size) {
@@ -1265,7 +1276,7 @@ static void TestLayoutDescriptorHelper(Isolate* isolate,
     }
   }
 
-  for (int offset = 0; offset < JSObject::kHeaderSize; offset += kPointerSize) {
+  for (int offset = 0; offset < JSObject::kHeaderSize; offset += kTaggedSize) {
     // Header queries
     CHECK(helper.IsTagged(offset));
     int end_of_region_offset;
@@ -1374,51 +1385,52 @@ TEST(LayoutDescriptorSharing) {
   {
     Handle<Map> map = Map::Create(isolate, 64);
     for (int i = 0; i < 32; i++) {
-      Handle<String> name = MakeName("prop", i);
+      Handle<String> name = CcTest::MakeName("prop", i);
       map = Map::CopyWithField(isolate, map, name, any_type, NONE,
                                PropertyConstness::kMutable,
                                Representation::Smi(), INSERT_TRANSITION)
                 .ToHandleChecked();
     }
-    split_map = Map::CopyWithField(isolate, map, MakeString("dbl"), any_type,
-                                   NONE, PropertyConstness::kMutable,
+    split_map = Map::CopyWithField(isolate, map, CcTest::MakeString("dbl"),
+                                   any_type, NONE, PropertyConstness::kMutable,
                                    Representation::Double(), INSERT_TRANSITION)
                     .ToHandleChecked();
   }
   Handle<LayoutDescriptor> split_layout_descriptor(
-      split_map->layout_descriptor(), isolate);
+      split_map->layout_descriptor(kAcquireLoad), isolate);
   CHECK(split_layout_descriptor->IsConsistentWithMap(*split_map, true));
   CHECK(split_layout_descriptor->IsSlowLayout());
   CHECK(split_map->owns_descriptors());
 
   Handle<Map> map1 =
-      Map::CopyWithField(isolate, split_map, MakeString("foo"), any_type, NONE,
-                         PropertyConstness::kMutable, Representation::Double(),
-                         INSERT_TRANSITION)
+      Map::CopyWithField(isolate, split_map, CcTest::MakeString("foo"),
+                         any_type, NONE, PropertyConstness::kMutable,
+                         Representation::Double(), INSERT_TRANSITION)
           .ToHandleChecked();
   CHECK(!split_map->owns_descriptors());
-  CHECK_EQ(*split_layout_descriptor, split_map->layout_descriptor());
+  CHECK_EQ(*split_layout_descriptor,
+           split_map->layout_descriptor(kAcquireLoad));
 
   // Layout descriptors should be shared with |split_map|.
   CHECK(map1->owns_descriptors());
-  CHECK_EQ(*split_layout_descriptor, map1->layout_descriptor());
-  CHECK(map1->layout_descriptor()->IsConsistentWithMap(*map1, true));
+  CHECK_EQ(*split_layout_descriptor, map1->layout_descriptor(kAcquireLoad));
+  CHECK(map1->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map1, true));
 
   Handle<Map> map2 =
-      Map::CopyWithField(isolate, split_map, MakeString("bar"), any_type, NONE,
-                         PropertyConstness::kMutable, Representation::Tagged(),
-                         INSERT_TRANSITION)
+      Map::CopyWithField(isolate, split_map, CcTest::MakeString("bar"),
+                         any_type, NONE, PropertyConstness::kMutable,
+                         Representation::Tagged(), INSERT_TRANSITION)
           .ToHandleChecked();
 
   // Layout descriptors should not be shared with |split_map|.
   CHECK(map2->owns_descriptors());
-  CHECK_NE(*split_layout_descriptor, map2->layout_descriptor());
-  CHECK(map2->layout_descriptor()->IsConsistentWithMap(*map2, true));
+  CHECK_NE(*split_layout_descriptor, map2->layout_descriptor(kAcquireLoad));
+  CHECK(map2->layout_descriptor(kAcquireLoad).IsConsistentWithMap(*map2, true));
 }
 
-
 static void TestWriteBarrier(Handle<Map> map, Handle<Map> new_map,
-                             int tagged_descriptor, int double_descriptor,
+                             InternalIndex tagged_descriptor,
+                             InternalIndex double_descriptor,
                              bool check_tagged_value = true) {
   FLAG_stress_compaction = true;
   FLAG_manual_evacuation_candidates_selection = true;
@@ -1438,13 +1450,13 @@ static void TestWriteBarrier(Handle<Map> map, Handle<Map> new_map,
   Handle<HeapObject> obj_value;
   {
     AlwaysAllocateScope always_allocate(isolate);
-    obj = factory->NewJSObjectFromMap(map, TENURED);
+    obj = factory->NewJSObjectFromMap(map, AllocationType::kOld);
     CHECK(old_space->Contains(*obj));
 
     obj_value = factory->NewHeapNumber(0.);
   }
 
-  CHECK(Heap::InNewSpace(*obj_value));
+  CHECK(Heap::InYoungGeneration(*obj_value));
 
   {
     FieldIndex index = FieldIndex::ForDescriptor(*map, tagged_descriptor);
@@ -1456,9 +1468,9 @@ static void TestWriteBarrier(Handle<Map> map, Handle<Map> new_map,
 
   // Migrate |obj| to |new_map| which should shift fields and put the
   // |boom_value| to the slot that was earlier recorded by write barrier.
-  JSObject::MigrateToMap(obj, new_map);
+  JSObject::MigrateToMap(isolate, obj, new_map);
 
-  Address fake_object = reinterpret_cast<Address>(*obj_value) + kPointerSize;
+  Address fake_object = obj_value->ptr() + kTaggedSize;
   uint64_t boom_value = bit_cast<uint64_t>(fake_object);
 
   FieldIndex double_field_index =
@@ -1477,10 +1489,9 @@ static void TestWriteBarrier(Handle<Map> map, Handle<Map> new_map,
   CHECK_EQ(boom_value, obj->RawFastDoublePropertyAsBitsAt(double_field_index));
 }
 
-
 static void TestIncrementalWriteBarrier(Handle<Map> map, Handle<Map> new_map,
-                                        int tagged_descriptor,
-                                        int double_descriptor,
+                                        InternalIndex tagged_descriptor,
+                                        InternalIndex double_descriptor,
                                         bool check_tagged_value = true) {
   if (FLAG_never_compact || !FLAG_incremental_marking) return;
   ManualGCScope manual_gc_scope;
@@ -1503,14 +1514,15 @@ static void TestIncrementalWriteBarrier(Handle<Map> map, Handle<Map> new_map,
   Page* ec_page;
   {
     AlwaysAllocateScope always_allocate(isolate);
-    obj = factory->NewJSObjectFromMap(map, TENURED);
+    obj = factory->NewJSObjectFromMap(map, AllocationType::kOld);
     CHECK(old_space->Contains(*obj));
 
     // Make sure |obj_value| is placed on an old-space evacuation candidate.
     heap::SimulateFullSpace(old_space);
-    obj_value = factory->NewJSArray(32 * KB, HOLEY_ELEMENTS, TENURED);
-    ec_page = Page::FromAddress(obj_value->address());
-    CHECK_NE(ec_page, Page::FromAddress(obj->address()));
+    obj_value =
+        factory->NewJSArray(32 * KB, HOLEY_ELEMENTS, AllocationType::kOld);
+    ec_page = Page::FromHeapObject(*obj_value);
+    CHECK_NE(ec_page, Page::FromHeapObject(*obj));
   }
 
   // Heap is ready, force |ec_page| to become an evacuation candidate and
@@ -1538,7 +1550,7 @@ static void TestIncrementalWriteBarrier(Handle<Map> map, Handle<Map> new_map,
   // Migrate |obj| to |new_map| which should shift fields and put the
   // |boom_value| to the slot that was earlier recorded by incremental write
   // barrier.
-  JSObject::MigrateToMap(obj, new_map);
+  JSObject::MigrateToMap(isolate, obj, new_map);
 
   uint64_t boom_value = UINT64_C(0xBAAD0176A37C28E1);
 
@@ -1579,27 +1591,29 @@ static void TestWriteBarrierObjectShiftFieldsRight(
   Handle<JSObject> func = GetObject("func");
 
   Handle<Map> map = Map::Create(isolate, 10);
-  map = Map::CopyWithConstant(isolate, map, MakeName("prop", 0), func, NONE,
-                              INSERT_TRANSITION)
+  map = Map::CopyWithConstant(isolate, map, CcTest::MakeName("prop", 0), func,
+                              NONE, INSERT_TRANSITION)
             .ToHandleChecked();
-  map = Map::CopyWithField(isolate, map, MakeName("prop", 1), any_type, NONE,
-                           PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", 1), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Double(), INSERT_TRANSITION)
             .ToHandleChecked();
-  map = Map::CopyWithField(isolate, map, MakeName("prop", 2), any_type, NONE,
-                           PropertyConstness::kMutable,
+  map = Map::CopyWithField(isolate, map, CcTest::MakeName("prop", 2), any_type,
+                           NONE, PropertyConstness::kMutable,
                            Representation::Tagged(), INSERT_TRANSITION)
             .ToHandleChecked();
 
   // Shift fields right by turning constant property to a field.
-  Handle<Map> new_map = Map::ReconfigureProperty(
-      isolate, map, 0, kData, NONE, Representation::Tagged(), any_type);
+  Handle<Map> new_map =
+      Map::ReconfigureProperty(isolate, map, InternalIndex(0), kData, NONE,
+                               Representation::Tagged(), any_type);
 
   if (write_barrier_kind == OLD_TO_NEW_WRITE_BARRIER) {
-    TestWriteBarrier(map, new_map, 2, 1);
+    TestWriteBarrier(map, new_map, InternalIndex(2), InternalIndex(1));
   } else {
     CHECK_EQ(OLD_TO_OLD_WRITE_BARRIER, write_barrier_kind);
-    TestIncrementalWriteBarrier(map, new_map, 2, 1);
+    TestIncrementalWriteBarrier(map, new_map, InternalIndex(2),
+                                InternalIndex(1));
   }
 }
 

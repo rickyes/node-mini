@@ -6,17 +6,17 @@
 #define V8_INSPECTOR_V8_DEBUGGER_H_
 
 #include <list>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "src/base/macros.h"
-#include "src/debug/debug-interface.h"
+#include "src/inspector/inspected-context.h"
 #include "src/inspector/protocol/Debugger.h"
 #include "src/inspector/protocol/Forward.h"
 #include "src/inspector/protocol/Runtime.h"
 #include "src/inspector/v8-debugger-script.h"
-#include "src/inspector/wasm-translation.h"
 
 #include "include/v8-inspector.h"
 
@@ -30,11 +30,36 @@ class V8InspectorImpl;
 class V8StackTraceImpl;
 struct V8StackTraceId;
 
+enum class WrapMode { kForceValue, kNoPreview, kWithPreview };
+
 using protocol::Response;
-using ScheduleStepIntoAsyncCallback =
-    protocol::Debugger::Backend::ScheduleStepIntoAsyncCallback;
 using TerminateExecutionCallback =
     protocol::Runtime::Backend::TerminateExecutionCallback;
+
+// This debugger id tries to be unique by generating two random
+// numbers, which should most likely avoid collisions.
+// Debugger id has a 1:1 mapping to context group. It is used to
+// attribute stack traces to a particular debugging, when doing any
+// cross-debugger operations (e.g. async step in).
+// See also Runtime.UniqueDebuggerId in the protocol.
+class V8DebuggerId {
+ public:
+  V8DebuggerId() = default;
+  explicit V8DebuggerId(std::pair<int64_t, int64_t>);
+  explicit V8DebuggerId(const String16&);
+  V8DebuggerId(const V8DebuggerId&) V8_NOEXCEPT = default;
+  ~V8DebuggerId() = default;
+
+  static V8DebuggerId generate(v8::Isolate*);
+
+  String16 toString() const;
+  bool isValid() const;
+  std::pair<int64_t, int64_t> pair() const;
+
+ private:
+  int64_t m_first = 0;
+  int64_t m_second = 0;
+};
 
 class V8Debugger : public v8::debug::DebugDelegate,
                    public v8::debug::AsyncEventDelegate {
@@ -52,18 +77,14 @@ class V8Debugger : public v8::debug::DebugDelegate,
   bool canBreakProgram();
   void breakProgram(int targetContextGroupId);
   void interruptAndBreak(int targetContextGroupId);
-  void continueProgram(int targetContextGroupId);
+  void continueProgram(int targetContextGroupId,
+                       bool terminateOnResume = false);
   void breakProgramOnAssert(int targetContextGroupId);
 
   void setPauseOnNextCall(bool, int targetContextGroupId);
   void stepIntoStatement(int targetContextGroupId, bool breakOnAsyncCall);
   void stepOverStatement(int targetContextGroupId);
   void stepOutOfFunction(int targetContextGroupId);
-  void scheduleStepIntoAsync(
-      std::unique_ptr<ScheduleStepIntoAsyncCallback> callback,
-      int targetContextGroupId);
-  void pauseOnAsyncCall(int targetContextGroupId, uintptr_t task,
-                        const String16& debuggerId);
 
   void terminateExecution(std::unique_ptr<TerminateExecutionCallback> callback);
 
@@ -76,8 +97,8 @@ class V8Debugger : public v8::debug::DebugDelegate,
   // compiled.
   // Only scripts whose debug data matches |contextGroupId| will be reported.
   // Passing 0 will result in reporting all scripts.
-  void getCompiledScripts(int contextGroupId,
-                          std::vector<std::unique_ptr<V8DebuggerScript>>&);
+  std::vector<std::unique_ptr<V8DebuggerScript>> getCompiledScripts(
+      int contextGroupId, V8DebuggerAgentImpl* agent);
   void enable();
   void disable();
 
@@ -119,29 +140,28 @@ class V8Debugger : public v8::debug::DebugDelegate,
 
   V8InspectorImpl* inspector() { return m_inspector; }
 
-  WasmTranslation* wasmTranslation() { return &m_wasmTranslation; }
-
   void setMaxAsyncTaskStacksForTest(int limit);
   void dumpAsyncTaskStacksStateForTest();
 
-  v8_inspector::V8StackTraceId scheduledAsyncCall() {
-    return m_scheduledAsyncCall;
-  }
-
-  std::pair<int64_t, int64_t> debuggerIdFor(int contextGroupId);
-  std::pair<int64_t, int64_t> debuggerIdFor(
-      const String16& serializedDebuggerId);
+  V8DebuggerId debuggerIdFor(int contextGroupId);
   std::shared_ptr<AsyncStackTrace> stackTraceFor(int contextGroupId,
                                                  const V8StackTraceId& id);
 
+  void reportTermination();
+
  private:
+  bool addInternalObject(v8::Local<v8::Context> context,
+                         v8::Local<v8::Object> object,
+                         V8InternalValueType type);
+
   void clearContinueToLocation();
   bool shouldContinueToCurrentLocation();
 
   static size_t nearHeapLimitCallback(void* data, size_t current_heap_limit,
                                       size_t initial_heap_limit);
   static void terminateExecutionCompletedCallback(v8::Isolate* isolate);
-
+  static void terminateExecutionCompletedCallbackIgnoringData(
+      v8::Isolate* isolate, void*);
   void handleProgramBreak(
       v8::Local<v8::Context> pausedContext, v8::Local<v8::Value> exception,
       const std::vector<v8::debug::BreakpointId>& hitBreakpoints,
@@ -160,6 +180,8 @@ class V8Debugger : public v8::debug::DebugDelegate,
                                            v8::Local<v8::Function>);
   v8::MaybeLocal<v8::Value> generatorScopes(v8::Local<v8::Context>,
                                             v8::Local<v8::Value>);
+  v8::MaybeLocal<v8::Array> collectionsEntries(v8::Local<v8::Context> context,
+                                               v8::Local<v8::Value> value);
 
   void asyncTaskScheduledForStack(const String16& taskName, void* task,
                                   bool recurring);
@@ -167,7 +189,7 @@ class V8Debugger : public v8::debug::DebugDelegate,
   void asyncTaskStartedForStack(void* task);
   void asyncTaskFinishedForStack(void* task);
 
-  void asyncTaskCandidateForStepping(void* task, bool isLocal);
+  void asyncTaskCandidateForStepping(void* task);
   void asyncTaskStartedForStepping(void* task);
   void asyncTaskFinishedForStepping(void* task);
   void asyncTaskCanceledForStepping(void* task);
@@ -188,15 +210,18 @@ class V8Debugger : public v8::debug::DebugDelegate,
                             const v8::debug::Location& start,
                             const v8::debug::Location& end) override;
 
+  bool ShouldBeSkipped(v8::Local<v8::debug::Script> script, int line,
+                       int column) override;
+
   int currentContextGroupId();
   bool asyncStepOutOfFunction(int targetContextGroupId, bool onlyAtReturn);
 
-  v8::MaybeLocal<v8::Uint32> stableObjectId(v8::Local<v8::Context>,
-                                            v8::Local<v8::Value>);
+  bool hasScheduledBreakOnNextFunctionCall() const;
 
   v8::Isolate* m_isolate;
   V8InspectorImpl* m_inspector;
   int m_enableCount;
+
   int m_breakpointsActiveCount = 0;
   int m_ignoreScriptParsedEventsCounter;
   size_t m_originalHeapLimit = 0;
@@ -225,35 +250,29 @@ class V8Debugger : public v8::debug::DebugDelegate,
   // V8Debugger owns all the async stacks, while most of the other references
   // are weak, which allows to collect some stacks when there are too many.
   std::list<std::shared_ptr<AsyncStackTrace>> m_allAsyncStacks;
-  std::unordered_map<int, std::weak_ptr<StackFrame>> m_framesCache;
 
   std::unordered_map<V8DebuggerAgentImpl*, int> m_maxAsyncCallStackDepthMap;
   void* m_taskWithScheduledBreak = nullptr;
-  String16 m_taskWithScheduledBreakDebuggerId;
 
-  std::unique_ptr<ScheduleStepIntoAsyncCallback> m_stepIntoAsyncCallback;
-  bool m_breakRequested = false;
+  // If any of the following three is true, we schedule pause on next JS
+  // execution using SetBreakOnNextFunctionCall.
+  bool m_externalAsyncTaskPauseRequested = false;       // External async task.
+  bool m_taskWithScheduledBreakPauseRequested = false;  // Local async task.
+  bool m_pauseOnNextCallRequested = false;  // setPauseOnNextCall API call.
 
   v8::debug::ExceptionBreakState m_pauseOnExceptionsState;
+  // Whether we should pause on async call execution (if any) while stepping in.
+  // See Debugger.stepInto for details.
   bool m_pauseOnAsyncCall = false;
-  v8_inspector::V8StackTraceId m_scheduledAsyncCall;
 
   using StackTraceIdToStackTrace =
       std::unordered_map<uintptr_t, std::weak_ptr<AsyncStackTrace>>;
   StackTraceIdToStackTrace m_storedStackTraces;
   uintptr_t m_lastStackTraceId = 0;
 
-  std::unordered_map<int, std::pair<int64_t, int64_t>>
-      m_contextGroupIdToDebuggerId;
-  std::unordered_map<String16, std::pair<int64_t, int64_t>>
-      m_serializedDebuggerIdToDebuggerId;
+  std::unordered_map<int, V8DebuggerId> m_contextGroupIdToDebuggerId;
 
   std::unique_ptr<TerminateExecutionCallback> m_terminateExecutionCallback;
-
-  uint32_t m_lastStableObjectId = 0;
-  v8::Global<v8::debug::WeakMap> m_stableObjectId;
-
-  WasmTranslation m_wasmTranslation;
 
   DISALLOW_COPY_AND_ASSIGN(V8Debugger);
 };

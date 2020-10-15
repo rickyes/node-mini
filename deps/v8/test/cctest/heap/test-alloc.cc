@@ -25,14 +25,15 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 #include "test/cctest/cctest.h"
 
-#include "src/accessors.h"
-#include "src/api-inl.h"
-#include "src/objects-inl.h"
+#include "src/api/api-inl.h"
+#include "src/builtins/accessors.h"
+#include "src/heap/heap-inl.h"
 #include "src/objects/api-callbacks.h"
-#include "src/property.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/property.h"
 #include "test/cctest/heap/heap-tester.h"
 #include "test/cctest/heap/heap-utils.h"
 
@@ -45,19 +46,20 @@ Handle<Object> HeapTester::TestAllocateAfterFailures() {
   // we wrap the allocator function in an AlwaysAllocateScope.  Test that
   // all allocations succeed immediately without any retry.
   CcTest::CollectAllAvailableGarbage();
-  AlwaysAllocateScope scope(CcTest::i_isolate());
   Heap* heap = CcTest::heap();
+  AlwaysAllocateScopeForTesting scope(heap);
   int size = FixedArray::SizeFor(100);
-  // New space.
-  HeapObject* obj = heap->AllocateRaw(size, NEW_SPACE).ToObjectChecked();
+  // Young generation.
+  HeapObject obj =
+      heap->AllocateRaw(size, AllocationType::kYoung).ToObjectChecked();
   // In order to pass heap verification on Isolate teardown, mark the
   // allocated area as a filler.
-  heap->CreateFillerObjectAt(obj->address(), size, ClearRecordedSlots::kNo);
+  heap->CreateFillerObjectAt(obj.address(), size, ClearRecordedSlots::kNo);
 
-  // Old space.
+  // Old generation.
   heap::SimulateFullSpace(heap->old_space());
-  obj = heap->AllocateRaw(size, OLD_SPACE).ToObjectChecked();
-  heap->CreateFillerObjectAt(obj->address(), size, ClearRecordedSlots::kNo);
+  obj = heap->AllocateRaw(size, AllocationType::kOld).ToObjectChecked();
+  heap->CreateFillerObjectAt(obj.address(), size, ClearRecordedSlots::kNo);
 
   // Large object space.
   static const size_t kLargeObjectSpaceFillerLength =
@@ -67,30 +69,34 @@ Handle<Object> HeapTester::TestAllocateAfterFailures() {
   CHECK_GT(kLargeObjectSpaceFillerSize,
            static_cast<size_t>(heap->old_space()->AreaSize()));
   while (heap->OldGenerationSpaceAvailable() > kLargeObjectSpaceFillerSize) {
-    obj = heap->AllocateRaw(kLargeObjectSpaceFillerSize, OLD_SPACE)
+    obj = heap->AllocateRaw(kLargeObjectSpaceFillerSize, AllocationType::kOld)
               .ToObjectChecked();
-    heap->CreateFillerObjectAt(obj->address(), size, ClearRecordedSlots::kNo);
+    heap->CreateFillerObjectAt(obj.address(), size, ClearRecordedSlots::kNo);
   }
-  obj = heap->AllocateRaw(kLargeObjectSpaceFillerSize, OLD_SPACE)
+  obj = heap->AllocateRaw(kLargeObjectSpaceFillerSize, AllocationType::kOld)
             .ToObjectChecked();
-  heap->CreateFillerObjectAt(obj->address(), size, ClearRecordedSlots::kNo);
+  heap->CreateFillerObjectAt(obj.address(), size, ClearRecordedSlots::kNo);
 
   // Map space.
   heap::SimulateFullSpace(heap->map_space());
-  obj = heap->AllocateRaw(Map::kSize, MAP_SPACE).ToObjectChecked();
-  heap->CreateFillerObjectAt(obj->address(), Map::kSize,
+  obj = heap->AllocateRaw(Map::kSize, AllocationType::kMap).ToObjectChecked();
+  heap->CreateFillerObjectAt(obj.address(), Map::kSize,
                              ClearRecordedSlots::kNo);
 
   // Code space.
   heap::SimulateFullSpace(heap->code_space());
-  size = CcTest::i_isolate()->builtins()->builtin(Builtins::kIllegal)->Size();
-  obj = heap->AllocateRaw(size, CODE_SPACE).ToObjectChecked();
-  heap->CreateFillerObjectAt(obj->address(), size, ClearRecordedSlots::kNo);
+  size = CcTest::i_isolate()->builtins()->builtin(Builtins::kIllegal).Size();
+  obj =
+      heap->AllocateRaw(size, AllocationType::kCode, AllocationOrigin::kRuntime)
+          .ToObjectChecked();
+  heap->CreateFillerObjectAt(obj.address(), size, ClearRecordedSlots::kNo);
   return CcTest::i_isolate()->factory()->true_value();
 }
 
 
 HEAP_TEST(StressHandles) {
+  // For TestAllocateAfterFailures.
+  FLAG_stress_concurrent_allocation = false;
   v8::HandleScope scope(CcTest::isolate());
   v8::Local<v8::Context> env = v8::Context::New(CcTest::isolate());
   env->Enter();
@@ -123,6 +129,8 @@ Handle<AccessorInfo> TestAccessorInfo(
 
 
 TEST(StressJS) {
+  // For TestAllocateAfterFailures in TestGetter.
+  FLAG_stress_concurrent_allocation = false;
   Isolate* isolate = CcTest::i_isolate();
   Factory* factory = isolate->factory();
   v8::HandleScope scope(CcTest::isolate());
@@ -133,15 +141,15 @@ TEST(StressJS) {
       factory->function_string(), isolate->sloppy_function_map(),
       Builtins::kEmptyFunction);
   Handle<JSFunction> function = factory->NewFunction(args);
-  CHECK(!function->shared()->construct_as_builtin());
+  CHECK(!function->shared().construct_as_builtin());
 
   // Force the creation of an initial map.
   factory->NewJSObject(function);
 
   // Patch the map to have an accessor for "get".
   Handle<Map> map(function->initial_map(), isolate);
-  Handle<DescriptorArray> instance_descriptors(map->instance_descriptors(),
-                                               isolate);
+  Handle<DescriptorArray> instance_descriptors(
+      map->instance_descriptors(kRelaxedLoad), isolate);
   CHECK_EQ(0, instance_descriptors->number_of_descriptors());
 
   PropertyAttributes attrs = NONE;
@@ -150,21 +158,17 @@ TEST(StressJS) {
 
   Descriptor d = Descriptor::AccessorConstant(
       Handle<Name>(Name::cast(foreign->name()), isolate), foreign, attrs);
-  map->AppendDescriptor(&d);
+  map->AppendDescriptor(isolate, &d);
 
   // Add the Foo constructor the global object.
   CHECK(env->Global()
-            ->Set(env, v8::String::NewFromUtf8(CcTest::isolate(), "Foo",
-                                               v8::NewStringType::kNormal)
-                           .ToLocalChecked(),
+            ->Set(env, v8::String::NewFromUtf8Literal(CcTest::isolate(), "Foo"),
                   v8::Utils::CallableToLocal(function))
             .FromJust());
   // Call the accessor through JavaScript.
   v8::Local<v8::Value> result =
-      v8::Script::Compile(
-          env, v8::String::NewFromUtf8(CcTest::isolate(), "(new Foo).get",
-                                       v8::NewStringType::kNormal)
-                   .ToLocalChecked())
+      v8::Script::Compile(env, v8::String::NewFromUtf8Literal(CcTest::isolate(),
+                                                              "(new Foo).get"))
           .ToLocalChecked()
           ->Run(env)
           .ToLocalChecked();

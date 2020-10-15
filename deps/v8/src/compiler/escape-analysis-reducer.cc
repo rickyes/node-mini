@@ -7,7 +7,7 @@
 #include "src/compiler/all-nodes.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/type-cache.h"
-#include "src/frame-constants.h"
+#include "src/execution/frame-constants.h"
 
 namespace v8 {
 namespace internal {
@@ -192,7 +192,7 @@ Node* EscapeAnalysisReducer::ReduceDeoptState(Node* node, Node* effect,
       return ObjectIdNode(vobject);
     } else {
       std::vector<Node*> inputs;
-      for (int offset = 0; offset < vobject->size(); offset += kPointerSize) {
+      for (int offset = 0; offset < vobject->size(); offset += kTaggedSize) {
         Node* field =
             analysis_result().GetVirtualObjectField(vobject, offset, effect);
         CHECK_NOT_NULL(field);
@@ -229,25 +229,17 @@ void EscapeAnalysisReducer::VerifyReplacement() const {
 
 void EscapeAnalysisReducer::Finalize() {
   for (Node* node : arguments_elements_) {
-    int mapped_count = NewArgumentsElementsMappedCountOf(node->op());
+    const NewArgumentsElementsParameters& params =
+        NewArgumentsElementsParametersOf(node->op());
+    ArgumentsStateType type = params.arguments_type();
+    int mapped_count = type == CreateArgumentsType::kMappedArguments
+                           ? params.formal_parameter_count()
+                           : 0;
 
     Node* arguments_frame = NodeProperties::GetValueInput(node, 0);
     if (arguments_frame->opcode() != IrOpcode::kArgumentsFrame) continue;
     Node* arguments_length = NodeProperties::GetValueInput(node, 1);
     if (arguments_length->opcode() != IrOpcode::kArgumentsLength) continue;
-
-    // If mapped arguments are specified, then their number is always equal to
-    // the number of formal parameters. This allows to use just the three-value
-    // {ArgumentsStateType} enum because the deoptimizer can reconstruct the
-    // value of {mapped_count} from the number of formal parameters.
-    DCHECK_IMPLIES(
-        mapped_count != 0,
-        mapped_count == FormalParameterCountOf(arguments_length->op()));
-    ArgumentsStateType type = IsRestLengthOf(arguments_length->op())
-                                  ? ArgumentsStateType::kRestParameter
-                                  : (mapped_count == 0)
-                                        ? ArgumentsStateType::kUnmappedArguments
-                                        : ArgumentsStateType::kMappedArguments;
 
     Node* arguments_length_state = nullptr;
     for (Edge edge : arguments_length->use_edges()) {
@@ -259,7 +251,7 @@ void EscapeAnalysisReducer::Finalize() {
         case IrOpcode::kTypedStateValues:
           if (!arguments_length_state) {
             arguments_length_state = jsgraph()->graph()->NewNode(
-                jsgraph()->common()->ArgumentsLengthState(type));
+                jsgraph()->common()->ArgumentsLengthState());
             NodeProperties::SetType(arguments_length_state,
                                     Type::OtherInternal());
           }
@@ -313,32 +305,43 @@ void EscapeAnalysisReducer::Finalize() {
       NodeProperties::SetType(arguments_elements_state, Type::OtherInternal());
       ReplaceWithValue(node, arguments_elements_state);
 
-      ElementAccess stack_access;
-      stack_access.base_is_tagged = BaseTaggedness::kUntaggedBase;
-      // Reduce base address by {kPointerSize} such that (length - index)
-      // resolves to the right position.
-      stack_access.header_size =
-          CommonFrameConstants::kFixedFrameSizeAboveFp - kPointerSize;
-      stack_access.type = Type::NonInternal();
-      stack_access.machine_type = MachineType::AnyTagged();
-      stack_access.write_barrier_kind = WriteBarrierKind::kNoWriteBarrier;
-      const Operator* load_stack_op =
-          jsgraph()->simplified()->LoadElement(stack_access);
-
       for (Node* load : loads) {
         switch (load->opcode()) {
           case IrOpcode::kLoadElement: {
             Node* index = NodeProperties::GetValueInput(load, 1);
-            // {offset} is a reverted index starting from 1. The base address is
-            // adapted to allow offsets starting from 1.
+            Node* formal_parameter_count =
+                jsgraph()->Constant(params.formal_parameter_count());
+            NodeProperties::SetType(
+                formal_parameter_count,
+                Type::Constant(params.formal_parameter_count(),
+                               jsgraph()->graph()->zone()));
+            Node* offset_to_first_elem = jsgraph()->Constant(
+                CommonFrameConstants::kFixedSlotCountAboveFp);
+            if (!NodeProperties::IsTyped(offset_to_first_elem)) {
+              NodeProperties::SetType(
+                  offset_to_first_elem,
+                  Type::Constant(CommonFrameConstants::kFixedSlotCountAboveFp,
+                                 jsgraph()->graph()->zone()));
+            }
+
             Node* offset = jsgraph()->graph()->NewNode(
-                jsgraph()->simplified()->NumberSubtract(), arguments_length,
-                index);
+                jsgraph()->simplified()->NumberAdd(), index,
+                offset_to_first_elem);
+            if (type == CreateArgumentsType::kRestParameter) {
+              // In the case of rest parameters we should skip the formal
+              // parameters.
+              NodeProperties::SetType(offset,
+                                      TypeCache::Get()->kArgumentsLengthType);
+              offset = jsgraph()->graph()->NewNode(
+                  jsgraph()->simplified()->NumberAdd(), offset,
+                  formal_parameter_count);
+            }
             NodeProperties::SetType(offset,
-                                    TypeCache::Get().kArgumentsLengthType);
+                                    TypeCache::Get()->kArgumentsLengthType);
             NodeProperties::ReplaceValueInput(load, arguments_frame, 0);
             NodeProperties::ReplaceValueInput(load, offset, 1);
-            NodeProperties::ChangeOp(load, load_stack_op);
+            NodeProperties::ChangeOp(
+                load, jsgraph()->simplified()->LoadStackArgument());
             break;
           }
           case IrOpcode::kLoadField: {

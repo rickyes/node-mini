@@ -46,6 +46,10 @@
 # the generated libv8 binary.
 #
 
+# for py2/py3 compatibility
+from __future__ import print_function
+
+import io
 import re
 import sys
 
@@ -82,7 +86,10 @@ consts_misc = [
     { 'name': 'SmiTagMask',             'value': 'kSmiTagMask' },
     { 'name': 'SmiValueShift',          'value': 'kSmiTagSize' },
     { 'name': 'SmiShiftSize',           'value': 'kSmiShiftSize' },
-    { 'name': 'PointerSizeLog2',        'value': 'kPointerSizeLog2' },
+    { 'name': 'SystemPointerSize',      'value': 'kSystemPointerSize' },
+    { 'name': 'SystemPointerSizeLog2',  'value': 'kSystemPointerSizeLog2' },
+    { 'name': 'TaggedSize',             'value': 'kTaggedSize' },
+    { 'name': 'TaggedSizeLog2',         'value': 'kTaggedSizeLog2' },
 
     { 'name': 'OddballFalse',           'value': 'Oddball::kFalse' },
     { 'name': 'OddballTrue',            'value': 'Oddball::kTrue' },
@@ -94,8 +101,6 @@ consts_misc = [
     { 'name': 'OddballOther',           'value': 'Oddball::kOther' },
     { 'name': 'OddballException',       'value': 'Oddball::kException' },
 
-    { 'name': 'prop_idx_first',
-        'value': 'DescriptorArray::kFirstIndex' },
     { 'name': 'prop_kind_Data',
         'value': 'kData' },
     { 'name': 'prop_kind_Accessor',
@@ -126,26 +131,14 @@ consts_misc = [
         'value': 'PropertyDetails::RepresentationField::kMask' },
     { 'name': 'prop_representation_shift',
         'value': 'PropertyDetails::RepresentationField::kShift' },
-    { 'name': 'prop_representation_integer8',
-        'value': 'Representation::Kind::kInteger8' },
-    { 'name': 'prop_representation_uinteger8',
-        'value': 'Representation::Kind::kUInteger8' },
-    { 'name': 'prop_representation_integer16',
-        'value': 'Representation::Kind::kInteger16' },
-    { 'name': 'prop_representation_uinteger16',
-        'value': 'Representation::Kind::kUInteger16' },
     { 'name': 'prop_representation_smi',
         'value': 'Representation::Kind::kSmi' },
-    { 'name': 'prop_representation_integer32',
-        'value': 'Representation::Kind::kInteger32' },
     { 'name': 'prop_representation_double',
         'value': 'Representation::Kind::kDouble' },
     { 'name': 'prop_representation_heapobject',
         'value': 'Representation::Kind::kHeapObject' },
     { 'name': 'prop_representation_tagged',
         'value': 'Representation::Kind::kTagged' },
-    { 'name': 'prop_representation_external',
-        'value': 'Representation::Kind::kExternal' },
 
     { 'name': 'prop_desc_key',
         'value': 'DescriptorArray::kEntryKeyIndex' },
@@ -164,15 +157,17 @@ consts_misc = [
         'value': 'DICTIONARY_ELEMENTS' },
 
     { 'name': 'bit_field2_elements_kind_mask',
-        'value': 'Map::ElementsKindBits::kMask' },
+        'value': 'Map::Bits2::ElementsKindBits::kMask' },
     { 'name': 'bit_field2_elements_kind_shift',
-        'value': 'Map::ElementsKindBits::kShift' },
+        'value': 'Map::Bits2::ElementsKindBits::kShift' },
     { 'name': 'bit_field3_is_dictionary_map_shift',
-        'value': 'Map::IsDictionaryMapBit::kShift' },
+        'value': 'Map::Bits3::IsDictionaryMapBit::kShift' },
     { 'name': 'bit_field3_number_of_own_descriptors_mask',
-        'value': 'Map::NumberOfOwnDescriptorsBits::kMask' },
+        'value': 'Map::Bits3::NumberOfOwnDescriptorsBits::kMask' },
     { 'name': 'bit_field3_number_of_own_descriptors_shift',
-        'value': 'Map::NumberOfOwnDescriptorsBits::kShift' },
+        'value': 'Map::Bits3::NumberOfOwnDescriptorsBits::kShift' },
+    { 'name': 'class_Map__instance_descriptors_offset',
+        'value': 'Map::kInstanceDescriptorsOffset' },
 
     { 'name': 'off_fp_context_or_frame_type',
         'value': 'CommonFrameConstants::kContextOrFrameTypeOffset'},
@@ -181,9 +176,9 @@ consts_misc = [
     { 'name': 'off_fp_constant_pool',
         'value': 'StandardFrameConstants::kConstantPoolOffset' },
     { 'name': 'off_fp_function',
-        'value': 'JavaScriptFrameConstants::kFunctionOffset' },
+        'value': 'StandardFrameConstants::kFunctionOffset' },
     { 'name': 'off_fp_args',
-        'value': 'JavaScriptFrameConstants::kLastParameterOffset' },
+        'value': 'StandardFrameConstants::kFixedFrameSizeAboveFp' },
 
     { 'name': 'scopeinfo_idx_nparams',
         'value': 'ScopeInfo::kParameterCount' },
@@ -192,23 +187,19 @@ consts_misc = [
     { 'name': 'scopeinfo_idx_first_vars',
         'value': 'ScopeInfo::kVariablePartIndex' },
 
-    { 'name': 'jsarray_buffer_was_neutered_mask',
-        'value': 'JSArrayBuffer::WasNeuteredBit::kMask' },
-    { 'name': 'jsarray_buffer_was_neutered_shift',
-        'value': 'JSArrayBuffer::WasNeuteredBit::kShift' },
+    { 'name': 'jsarray_buffer_was_detached_mask',
+        'value': 'JSArrayBuffer::WasDetachedBit::kMask' },
+    { 'name': 'jsarray_buffer_was_detached_shift',
+        'value': 'JSArrayBuffer::WasDetachedBit::kShift' },
 
     { 'name': 'context_idx_scope_info',
         'value': 'Context::SCOPE_INFO_INDEX' },
-    { 'name': 'context_idx_native',
-        'value': 'Context::NATIVE_CONTEXT_INDEX' },
     { 'name': 'context_idx_prev',
         'value': 'Context::PREVIOUS_INDEX' },
-    { 'name': 'context_idx_ext',
-        'value': 'Context::EXTENSION_INDEX' },
     { 'name': 'context_min_slots',
         'value': 'Context::MIN_CONTEXT_SLOTS' },
-    { 'name': 'context_idx_embedder_data',
-        'value': 'Internals::kContextEmbedderDataIndex' },
+    { 'name': 'native_context_embedder_data_offset',
+        'value': 'Internals::kNativeContextEmbedderDataOffset' },
 
 
     { 'name': 'namedictionaryshape_prefix_size',
@@ -244,15 +235,18 @@ consts_misc = [
 #
 extras_accessors = [
     'JSFunction, context, Context, kContextOffset',
+    'JSFunction, shared, SharedFunctionInfo, kSharedFunctionInfoOffset',
     'HeapObject, map, Map, kMapOffset',
     'JSObject, elements, Object, kElementsOffset',
     'JSObject, internal_fields, uintptr_t, kHeaderSize',
     'FixedArray, data, uintptr_t, kHeaderSize',
-    'FixedTypedArrayBase, external_pointer, Object, kExternalPointerOffset',
-    'JSArrayBuffer, backing_store, Object, kBackingStoreOffset',
+    'JSArrayBuffer, backing_store, uintptr_t, kBackingStoreOffset',
     'JSArrayBuffer, byte_length, size_t, kByteLengthOffset',
     'JSArrayBufferView, byte_length, size_t, kByteLengthOffset',
     'JSArrayBufferView, byte_offset, size_t, kByteOffsetOffset',
+    'JSDate, value, Object, kValueOffset',
+    'JSRegExp, source, Object, kSourceOffset',
+    'JSTypedArray, external_pointer, uintptr_t, kExternalPointerOffset',
     'JSTypedArray, length, Object, kLengthOffset',
     'Map, instance_size_in_words, char, kInstanceSizeInWordsOffset',
     'Map, inobject_properties_start_or_constructor_function_index, char, kInObjectPropertiesStartOrConstructorFunctionIndexOffset',
@@ -263,11 +257,10 @@ extras_accessors = [
     'Map, prototype, Object, kPrototypeOffset',
     'Oddball, kind_offset, int, kKindOffset',
     'HeapNumber, value, double, kValueOffset',
-    'ConsString, first, String, kFirstOffset',
-    'ConsString, second, String, kSecondOffset',
     'ExternalString, resource, Object, kResourceOffset',
     'SeqOneByteString, chars, char, kHeaderSize',
     'SeqTwoByteString, chars, char, kHeaderSize',
+    'UncompiledData, inferred_name, String, kInferredNameOffset',
     'UncompiledData, start_position, int32_t, kStartPositionOffset',
     'UncompiledData, end_position, int32_t, kEndPositionOffset',
     'SharedFunctionInfo, raw_function_token_offset, int16_t, kFunctionTokenOffsetOffset',
@@ -278,6 +271,12 @@ extras_accessors = [
     'Code, instruction_start, uintptr_t, kHeaderSize',
     'Code, instruction_size, int, kInstructionSizeOffset',
     'String, length, int32_t, kLengthOffset',
+    'DescriptorArray, header_size, uintptr_t, kHeaderSize',
+    'ConsString, first, String, kFirstOffset',
+    'ConsString, second, String, kSecondOffset',
+    'SlicedString, offset, SMI, kOffsetOffset',
+    'ThinString, actual, String, kActualOffset',
+    'Symbol, name, Object, kDescriptionOffset',
 ];
 
 #
@@ -287,8 +286,9 @@ extras_accessors = [
 #
 expected_classes = [
     'ConsString', 'FixedArray', 'HeapNumber', 'JSArray', 'JSFunction',
-    'JSObject', 'JSRegExp', 'JSValue', 'Map', 'Oddball', 'Script',
-    'SeqOneByteString', 'SharedFunctionInfo', 'ScopeInfo', 'JSPromise'
+    'JSObject', 'JSRegExp', 'JSPrimitiveWrapper', 'Map', 'Oddball', 'Script',
+    'SeqOneByteString', 'SharedFunctionInfo', 'ScopeInfo', 'JSPromise',
+    'DescriptorArray'
 ];
 
 
@@ -306,15 +306,17 @@ header = '''
  * This file is generated by %s.  Do not edit directly.
  */
 
-#include "src/v8.h"
-#include "src/frames.h"
-#include "src/frames-inl.h" /* for architecture-specific frame constants */
-#include "src/contexts.h"
-#include "src/objects.h"
+#include "src/init/v8.h"
+#include "src/execution/frames.h"
+#include "src/execution/frames-inl.h" /* for architecture-specific frame constants */
+#include "src/objects/contexts.h"
+#include "src/objects/objects.h"
+#include "src/objects/data-handler.h"
 #include "src/objects/js-promise.h"
 #include "src/objects/js-regexp-string-iterator.h"
 
-using namespace v8::internal;
+namespace v8 {
+namespace internal {
 
 extern "C" {
 
@@ -329,6 +331,9 @@ STACK_FRAME_TYPE_LIST(FRAME_CONST)
 ''' % sys.argv[0];
 
 footer = '''
+}
+
+}
 }
 '''
 
@@ -370,10 +375,15 @@ def load_objects():
 
 
 def load_objects_from_file(objfilename, checktypes):
-        objfile = open(objfilename, 'r');
+        objfile = io.open(objfilename, 'r', encoding='utf-8');
         in_insttype = False;
+        in_torque_insttype = False
+        in_torque_fulldef = False
 
         typestr = '';
+        torque_typestr = ''
+        torque_fulldefstr = ''
+        uncommented_file = ''
 
         #
         # Iterate the header file line-by-line to collect type and class
@@ -386,9 +396,25 @@ def load_objects_from_file(objfilename, checktypes):
                         in_insttype = True;
                         continue;
 
+                if (line.startswith('#define TORQUE_ASSIGNED_INSTANCE_TYPE_LIST')):
+                        in_torque_insttype = True
+                        continue
+
+                if (line.startswith('#define TORQUE_INSTANCE_CHECKERS_SINGLE_FULLY_DEFINED')):
+                        in_torque_fulldef = True
+                        continue
+
                 if (in_insttype and line.startswith('};')):
                         in_insttype = False;
                         continue;
+
+                if (in_torque_insttype and (not line or line.isspace())):
+                          in_torque_insttype = False
+                          continue
+
+                if (in_torque_fulldef and (not line or line.isspace())):
+                          in_torque_fulldef = False
+                          continue
 
                 line = re.sub('//.*', '', line.strip());
 
@@ -396,15 +422,34 @@ def load_objects_from_file(objfilename, checktypes):
                         typestr += line;
                         continue;
 
-                match = re.match('class (\w[^:]*)(: public (\w[^{]*))?\s*{\s*',
-                    line);
+                if (in_torque_insttype):
+                        torque_typestr += line
+                        continue
 
-                if (match):
-                        klass = match.group(1).strip();
-                        pklass = match.group(3);
-                        if (pklass):
-                                pklass = pklass.strip();
-                        klasses[klass] = { 'parent': pklass };
+                if (in_torque_fulldef):
+                        torque_fulldefstr += line
+                        continue
+
+                uncommented_file += '\n' + line
+
+        for match in re.finditer(r'\nclass(?:\s+V8_EXPORT(?:_PRIVATE)?)?'
+                                 r'\s+(\w[^:;]*)'
+                                 r'(?:: public (\w[^{]*))?\s*{\s*',
+                                 uncommented_file):
+                klass = match.group(1).strip();
+                pklass = match.group(2);
+                if (pklass):
+                        # Check for generated Torque class.
+                        gen_match = re.match(
+                            r'TorqueGenerated\w+\s*<\s*\w+,\s*(\w+)\s*>',
+                            pklass)
+                        if (gen_match):
+                                pklass = gen_match.group(1)
+                        # Strip potential template arguments from parent
+                        # class.
+                        match = re.match(r'(\w+)(<.*>)?', pklass.strip());
+                        pklass = match.group(1).strip();
+                klasses[klass] = { 'parent': pklass };
 
         #
         # Process the instance type declaration.
@@ -412,7 +457,21 @@ def load_objects_from_file(objfilename, checktypes):
         entries = typestr.split(',');
         for entry in entries:
                 types[re.sub('\s*=.*', '', entry).lstrip()] = True;
-
+        entries = torque_typestr.split('\\')
+        for entry in entries:
+                types[re.sub(r' *V\(|\) *', '', entry)] = True
+        entries = torque_fulldefstr.split('\\')
+        for entry in entries:
+                entry = entry.strip()
+                if not entry:
+                    continue
+                idx = entry.find('(');
+                rest = entry[idx + 1: len(entry) - 1];
+                args = re.split('\s*,\s*', rest);
+                typename = args[0]
+                typeconst = args[1]
+                types[typeconst] = True
+                typeclasses[typeconst] = typename
         #
         # Infer class names for each type based on a systematic transformation.
         # For example, "JS_FUNCTION_TYPE" becomes "JSFunction".  We find the
@@ -421,10 +480,7 @@ def load_objects_from_file(objfilename, checktypes):
         # way around.
         #
         for type in types:
-                #
-                # REGEXP behaves like REG_EXP, as in JS_REGEXP_TYPE => JSRegExp.
-                #
-                usetype = re.sub('_REGEXP_', '_REG_EXP_', type);
+                usetype = type
 
                 #
                 # Remove the "_TYPE" suffix and then convert to camel case,
@@ -518,24 +574,24 @@ def parse_field(call):
 
         consts = [];
 
-        if (kind == 'ACCESSORS' or kind == 'ACCESSORS_GCSAFE'):
-                klass = args[0];
-                field = args[1];
-                dtype = args[2].replace('<', '_').replace('>', '_')
-                offset = args[3];
-
-                return ({
-                    'name': 'class_%s__%s__%s' % (klass, field, dtype),
-                    'value': '%s::%s' % (klass, offset)
-                });
-
-        assert(kind == 'SMI_ACCESSORS' or kind == 'ACCESSORS_TO_SMI');
         klass = args[0];
         field = args[1];
-        offset = args[2];
+        dtype = None
+        offset = None
+        if kind.startswith('WEAK_ACCESSORS'):
+                dtype = 'weak'
+                offset = args[2];
+        elif not (kind.startswith('SMI_ACCESSORS') or kind.startswith('ACCESSORS_TO_SMI')):
+                dtype = args[2].replace('<', '_').replace('>', '_')
+                offset = args[3];
+        else:
+                offset = args[2];
+                dtype = 'SMI'
 
+
+        assert(offset is not None and dtype is not None);
         return ({
-            'name': 'class_%s__%s__%s' % (klass, field, 'SMI'),
+            'name': 'class_%s__%s__%s' % (klass, field, dtype),
             'value': '%s::%s' % (klass, offset)
         });
 
@@ -552,7 +608,7 @@ def load_fields():
 
 
 def load_fields_from_file(filename):
-        inlfile = open(filename, 'r');
+        inlfile = io.open(filename, 'r', encoding='utf-8');
 
         #
         # Each class's fields and the corresponding offsets are described in the
@@ -561,8 +617,11 @@ def load_fields_from_file(filename):
         # may span multiple lines and may contain nested parentheses.  We also
         # call parse_field() to pick apart the invocation.
         #
-        prefixes = [ 'ACCESSORS', 'ACCESSORS_GCSAFE',
-                     'SMI_ACCESSORS', 'ACCESSORS_TO_SMI' ];
+        prefixes = [ 'ACCESSORS', 'ACCESSORS2', 'ACCESSORS_GCSAFE',
+                     'SMI_ACCESSORS', 'ACCESSORS_TO_SMI',
+                     'RELEASE_ACQUIRE_ACCESSORS', 'WEAK_ACCESSORS' ];
+        prefixes += ([ prefix + "_CHECKED" for prefix in prefixes ] +
+                     [ prefix + "_CHECKED2" for prefix in prefixes ])
         current = '';
         opens = 0;
 
@@ -608,20 +667,25 @@ def load_fields_from_file(filename):
 # Emit a block of constants.
 #
 def emit_set(out, consts):
+        lines = set()  # To remove duplicates.
+
         # Fix up overzealous parses.  This could be done inside the
         # parsers but as there are several, it's easiest to do it here.
         ws = re.compile('\s+')
         for const in consts:
                 name = ws.sub('', const['name'])
                 value = ws.sub('', str(const['value']))  # Can be a number.
-                out.write('int v8dbg_%s = %s;\n' % (name, value))
+                lines.add('int v8dbg_%s = %s;\n' % (name, value))
+
+        for line in lines:
+                out.write(line);
         out.write('\n');
 
 #
 # Emit the whole output file.
 #
 def emit_config():
-        out = file(sys.argv[1], 'w');
+        out = open(sys.argv[1], 'w');
 
         out.write(header);
 
@@ -630,9 +694,7 @@ def emit_config():
 
         out.write('/* class type information */\n');
         consts = [];
-        keys = typeclasses.keys();
-        keys.sort();
-        for typename in keys:
+        for typename in sorted(typeclasses):
                 klass = typeclasses[typename];
                 consts.append({
                     'name': 'type_%s__%s' % (klass, typename),
@@ -643,9 +705,7 @@ def emit_config():
 
         out.write('/* class hierarchy information */\n');
         consts = [];
-        keys = klasses.keys();
-        keys.sort();
-        for klassname in keys:
+        for klassname in sorted(klasses):
                 pklass = klasses[klassname]['parent'];
                 bklass = get_base_class(klassname);
                 if (bklass != 'Object'):

@@ -4,7 +4,6 @@
 
 // Flags: --expose-wasm --expose-gc --allow-natives-syntax
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 // Use global variables for all values where the test wants to maintain strict
@@ -81,6 +80,7 @@ assertEquals(0, %WasmGetNumberOfInstances(module));
   instance4 = new WebAssembly.Instance(module, {"": {getValue: () => 4}});
   assertEquals(4, instance4.exports.f());
   module = null;
+  instance4 = null;
 })();
 
 // Note that two GC's are required because weak slots clearing is deferred.

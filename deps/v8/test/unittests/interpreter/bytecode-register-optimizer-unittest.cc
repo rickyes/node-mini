@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
 #include "src/interpreter/bytecode-label.h"
 #include "src/interpreter/bytecode-register-optimizer.h"
@@ -28,9 +28,9 @@ class BytecodeRegisterOptimizerTest
 
   void Initialize(int number_of_parameters, int number_of_locals) {
     register_allocator_ = new BytecodeRegisterAllocator(number_of_locals);
-    register_optimizer_ = new (zone())
-        BytecodeRegisterOptimizer(zone(), register_allocator_, number_of_locals,
-                                  number_of_parameters, this);
+    register_optimizer_ = zone()->New<BytecodeRegisterOptimizer>(
+        zone(), register_allocator_, number_of_locals, number_of_parameters,
+        this);
   }
 
   void EmitLdar(Register input) override {

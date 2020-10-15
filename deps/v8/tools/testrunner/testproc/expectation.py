@@ -14,14 +14,8 @@ class ForgiveTimeoutProc(base.TestProcProducer):
 
   def _next_test(self, test):
     subtest = self._create_subtest(test, 'no_timeout')
-    if subtest.expected_outcomes == outproc.OUTCOMES_PASS:
-      subtest.expected_outcomes = outproc.OUTCOMES_PASS_OR_TIMEOUT
-    elif subtest.expected_outcomes == outproc.OUTCOMES_FAIL:
-      subtest.expected_outcomes = outproc.OUTCOMES_FAIL_OR_TIMEOUT
-    elif statusfile.TIMEOUT not in subtest.expected_outcomes:
-      subtest.expected_outcomes = (
-          subtest.expected_outcomes + [statusfile.TIMEOUT])
-    self._send_test(subtest)
+    subtest.allow_timeouts()
+    return self._send_test(subtest)
 
   def _result_for(self, test, subtest, result):
     self._send_result(test, result)

@@ -6,6 +6,7 @@
 #define V8_OBJECTS_JS_WEAK_REFS_H_
 
 #include "src/objects/js-objects.h"
+#include "torque-generated/bit-fields.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -13,106 +14,104 @@
 namespace v8 {
 namespace internal {
 
-class JSWeakCell;
+class NativeContext;
+class WeakCell;
 
-// WeakFactory object from the JS Weak Refs spec proposal:
+// FinalizationRegistry object from the JS Weak Refs spec proposal:
 // https://github.com/tc39/proposal-weakrefs
-class JSWeakFactory : public JSObject {
+class JSFinalizationRegistry : public JSObject {
  public:
-  DECL_PRINTER(JSWeakFactory)
-  DECL_VERIFIER(JSWeakFactory)
-  DECL_CAST(JSWeakFactory)
+  DECL_PRINTER(JSFinalizationRegistry)
+  EXPORT_DECL_VERIFIER(JSFinalizationRegistry)
+  DECL_CAST(JSFinalizationRegistry)
 
+  DECL_ACCESSORS(native_context, NativeContext)
   DECL_ACCESSORS(cleanup, Object)
-  DECL_ACCESSORS(active_cells, Object)
-  DECL_ACCESSORS(cleared_cells, Object)
 
-  // For storing a list of JSWeakFactory objects in NativeContext.
-  DECL_ACCESSORS(next, Object)
+  DECL_ACCESSORS(active_cells, HeapObject)
+  DECL_ACCESSORS(cleared_cells, HeapObject)
+  DECL_ACCESSORS(key_map, Object)
+
+  DECL_ACCESSORS(next_dirty, Object)
 
   DECL_INT_ACCESSORS(flags)
 
-  // Adds a newly constructed JSWeakCell object into this JSWeakFactory.
-  inline void AddWeakCell(JSWeakCell* weak_cell);
+  DECL_BOOLEAN_ACCESSORS(scheduled_for_cleanup)
+
+  class BodyDescriptor;
+
+  inline static void RegisterWeakCellWithUnregisterToken(
+      Handle<JSFinalizationRegistry> finalization_registry,
+      Handle<WeakCell> weak_cell, Isolate* isolate);
+  inline static bool Unregister(
+      Handle<JSFinalizationRegistry> finalization_registry,
+      Handle<JSReceiver> unregister_token, Isolate* isolate);
+
+  // RemoveUnregisterToken is called from both Unregister and during GC. Since
+  // it modifies slots in key_map and WeakCells and the normal write barrier is
+  // disabled during GC, we need to tell the GC about the modified slots via the
+  // gc_notify_updated_slot function.
+  template <typename MatchCallback, typename GCNotifyUpdatedSlotCallback>
+  inline bool RemoveUnregisterToken(
+      JSReceiver unregister_token, Isolate* isolate,
+      MatchCallback match_callback,
+      GCNotifyUpdatedSlotCallback gc_notify_updated_slot);
 
   // Returns true if the cleared_cells list is non-empty.
   inline bool NeedsCleanup() const;
 
-  inline bool scheduled_for_cleanup() const;
-  inline void set_scheduled_for_cleanup(bool scheduled_for_cleanup);
+  // Remove the already-popped weak_cell from its unregister token linked list,
+  // as well as removing the entry from the key map if it is the only WeakCell
+  // with its unregister token. This method cannot GC and does not shrink the
+  // key map. Asserts that weak_cell has a non-undefined unregister token.
+  //
+  // It takes raw Addresses because it is called from CSA and Torque.
+  V8_EXPORT_PRIVATE static void RemoveCellFromUnregisterTokenMap(
+      Isolate* isolate, Address raw_finalization_registry,
+      Address raw_weak_cell);
 
-  // Get and remove the first cleared JSWeakCell from the cleared_cells
-  // list. (Assumes there is one.)
-  inline JSWeakCell* PopClearedCell(Isolate* isolate);
-
-  static const int kCleanupOffset = JSObject::kHeaderSize;
-  static const int kActiveCellsOffset = kCleanupOffset + kPointerSize;
-  static const int kClearedCellsOffset = kActiveCellsOffset + kPointerSize;
-  static const int kNextOffset = kClearedCellsOffset + kPointerSize;
-  static const int kFlagsOffset = kNextOffset + kPointerSize;
-  static const int kSize = kFlagsOffset + kPointerSize;
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      JSObject::kHeaderSize, TORQUE_GENERATED_JS_FINALIZATION_REGISTRY_FIELDS)
 
   // Bitfields in flags.
-  class ScheduledForCleanupField : public BitField<bool, 0, 1> {};
+  DEFINE_TORQUE_GENERATED_FINALIZATION_REGISTRY_FLAGS()
 
-  static void CleanupJSWeakFactoriesCallback(void* data);
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakFactory);
+  OBJECT_CONSTRUCTORS(JSFinalizationRegistry, JSObject);
 };
 
-// WeakCell object from the JS Weak Refs spec proposal.
-class JSWeakCell : public JSObject {
+// Internal object for storing weak references in JSFinalizationRegistry.
+class WeakCell : public TorqueGeneratedWeakCell<WeakCell, HeapObject> {
  public:
-  DECL_PRINTER(JSWeakCell)
-  DECL_VERIFIER(JSWeakCell)
-  DECL_CAST(JSWeakCell)
-
-  DECL_ACCESSORS(factory, Object)
-  DECL_ACCESSORS(target, Object)
-  DECL_ACCESSORS(holdings, Object)
-
-  // For storing doubly linked lists of JSWeakCells in JSWeakFactory.
-  DECL_ACCESSORS(prev, Object)
-  DECL_ACCESSORS(next, Object)
-
-  static const int kFactoryOffset = JSObject::kHeaderSize;
-  static const int kTargetOffset = kFactoryOffset + kPointerSize;
-  static const int kHoldingsOffset = kTargetOffset + kPointerSize;
-  static const int kPrevOffset = kHoldingsOffset + kPointerSize;
-  static const int kNextOffset = kPrevOffset + kPointerSize;
-  static const int kSize = kNextOffset + kPointerSize;
+  DECL_PRINTER(WeakCell)
+  EXPORT_DECL_VERIFIER(WeakCell)
 
   class BodyDescriptor;
 
-  // Nullify is called during GC and it modifies the pointers in JSWeakCell and
-  // JSWeakFactory. Thus we need to tell the GC about the modified slots via the
-  // gc_notify_updated_slot function. The normal write barrier is not enough,
-  // since it's disabled before GC.
-  inline void Nullify(
-      Isolate* isolate,
-      std::function<void(HeapObject* object, ObjectSlot slot, Object* target)>
-          gc_notify_updated_slot);
+  // Provide relaxed load access to target field.
+  inline HeapObject relaxed_target() const;
 
-  inline void Clear(Isolate* isolate);
+  // Nullify is called during GC and it modifies the pointers in WeakCell and
+  // JSFinalizationRegistry. Thus we need to tell the GC about the modified
+  // slots via the gc_notify_updated_slot function. The normal write barrier is
+  // not enough, since it's disabled before GC.
+  template <typename GCNotifyUpdatedSlotCallback>
+  inline void Nullify(Isolate* isolate,
+                      GCNotifyUpdatedSlotCallback gc_notify_updated_slot);
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakCell);
+  inline void RemoveFromFinalizationRegistryCells(Isolate* isolate);
+
+  TQ_OBJECT_CONSTRUCTORS(WeakCell)
 };
 
-class JSWeakFactoryCleanupIterator : public JSObject {
+class JSWeakRef : public TorqueGeneratedJSWeakRef<JSWeakRef, JSObject> {
  public:
-  DECL_PRINTER(JSWeakFactoryCleanupIterator)
-  DECL_VERIFIER(JSWeakFactoryCleanupIterator)
-  DECL_CAST(JSWeakFactoryCleanupIterator)
+  DECL_PRINTER(JSWeakRef)
+  EXPORT_DECL_VERIFIER(JSWeakRef)
 
-  DECL_ACCESSORS(factory, JSWeakFactory)
+  class BodyDescriptor;
 
-  static const int kFactoryOffset = JSObject::kHeaderSize;
-  static const int kSize = kFactoryOffset + kPointerSize;
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSWeakFactoryCleanupIterator);
+  TQ_OBJECT_CONSTRUCTORS(JSWeakRef)
 };
 
 }  // namespace internal

@@ -2,31 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/compiler/code-generator.h"
+#include "src/compiler/backend/code-generator.h"
+#include "src/compiler/backend/instruction.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
-#include "src/compiler/instruction.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node.h"
 #include "src/compiler/operator.h"
 #include "src/compiler/schedule.h"
 #include "src/compiler/scheduler.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
 
-typedef v8::internal::compiler::Instruction TestInstr;
-typedef v8::internal::compiler::InstructionSequence TestInstrSeq;
+using TestInstr = v8::internal::compiler::Instruction;
+using TestInstrSeq = v8::internal::compiler::InstructionSequence;
 
 // A testing helper for the register code abstraction.
 class InstructionTester : public HandleAndZoneScope {
  public:  // We're all friends here.
   InstructionTester()
-      : graph(zone()),
+      : HandleAndZoneScope(kCompressGraphZone),
+        graph(zone()),
         schedule(zone()),
         common(zone()),
         machine(zone()),
@@ -48,8 +49,8 @@ class InstructionTester : public HandleAndZoneScope {
     }
     InstructionBlocks* instruction_blocks =
         TestInstrSeq::InstructionBlocksFor(main_zone(), &schedule);
-    code = new (main_zone())
-        TestInstrSeq(main_isolate(), main_zone(), instruction_blocks);
+    code = main_zone()->New<TestInstrSeq>(main_isolate(), main_zone(),
+                                          instruction_blocks);
   }
 
   Node* Int32Constant(int32_t val) {

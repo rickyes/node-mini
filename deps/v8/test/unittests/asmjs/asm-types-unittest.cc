@@ -178,7 +178,7 @@ TEST_F(AsmTypeTest, ValidateBits) {
   EXPECT_EQ(total_types, seen_numbers.size());
 }
 
-TEST_F(AsmTypeTest, SaneParentsMap) {
+TEST_F(AsmTypeTest, SensibleParentsMap) {
   // This test ensures our parents map contains all the parents types that are
   // specified in the types' declaration. It does not report bogus inheritance.
 
@@ -250,7 +250,7 @@ TEST_F(AsmTypeTest, IsExactly) {
 
   for (size_t ii = 0; ii < arraysize(test_types); ++ii) {
     for (size_t jj = 0; jj < arraysize(test_types); ++jj) {
-      EXPECT_EQ(ii == jj, test_types[ii]->IsExactly(test_types[jj]))
+      EXPECT_EQ(ii == jj, AsmType::IsExactly(test_types[ii], test_types[jj]))
           << test_types[ii]->Name()
           << ((ii == jj) ? " is not exactly " : " is exactly ")
           << test_types[jj]->Name();

@@ -4,7 +4,7 @@
 
 #include <limits>
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
 #include "src/ast/scopes.h"
 #include "src/interpreter/bytecode-array-builder.h"
@@ -12,7 +12,9 @@
 #include "src/interpreter/bytecode-jump-table.h"
 #include "src/interpreter/bytecode-label.h"
 #include "src/interpreter/bytecode-register-allocator.h"
-#include "src/objects-inl.h"
+#include "src/numbers/hash-seed-inl.h"
+#include "src/objects/objects-inl.h"
+#include "src/objects/smi.h"
 #include "test/unittests/interpreter/bytecode-utils.h"
 #include "test/unittests/test-utils.h"
 
@@ -33,7 +35,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   BytecodeArrayBuilder builder(zone(), 1, 131, &feedback_spec);
   Factory* factory = isolate()->factory();
   AstValueFactory ast_factory(zone(), isolate()->ast_string_constants(),
-                              isolate()->heap()->HashSeed());
+                              HashSeed(isolate()));
   DeclarationScope scope(zone(), &ast_factory);
 
   CHECK_EQ(builder.locals_count(), 131);
@@ -54,7 +56,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CreateArguments(CreateArgumentsType::kRestParameter);
 
   // Emit constant loads.
-  builder.LoadLiteral(Smi::kZero)
+  builder.LoadLiteral(Smi::zero())
       .StoreAccumulatorInRegister(reg)
       .LoadLiteral(Smi::FromInt(8))
       .CompareOperation(Token::Value::EQ, reg,
@@ -77,8 +79,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .StoreAccumulatorInRegister(wide);
 
   // Emit Ldar and Star taking care to foil the register optimizer.
-  builder.StackCheck(0)
-      .LoadAccumulatorWithRegister(other)
+  builder.LoadAccumulatorWithRegister(other)
       .BinaryOperation(Token::ADD, reg, 1)
       .StoreAccumulatorInRegister(reg)
       .LoadNull();
@@ -94,6 +95,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   FeedbackSlot sloppy_store_global_slot =
       feedback_spec.AddStoreGlobalICSlot(LanguageMode::kSloppy);
   FeedbackSlot load_slot = feedback_spec.AddLoadICSlot();
+  FeedbackSlot call_slot = feedback_spec.AddCallICSlot();
   FeedbackSlot keyed_load_slot = feedback_spec.AddKeyedLoadICSlot();
   FeedbackSlot sloppy_store_slot =
       feedback_spec.AddStoreICSlot(LanguageMode::kSloppy);
@@ -135,6 +137,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   // Emit load / store property operations.
   builder.LoadNamedProperty(reg, name, load_slot.ToInt())
       .LoadNamedPropertyNoFeedback(reg, name)
+      .LoadNamedPropertyFromSuper(reg, name, load_slot.ToInt())
       .LoadKeyedProperty(reg, keyed_load_slot.ToInt())
       .StoreNamedProperty(reg, name, sloppy_store_slot.ToInt(),
                           LanguageMode::kSloppy)
@@ -148,6 +151,9 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
                           LanguageMode::kStrict)
       .StoreNamedOwnProperty(reg, name, store_own_slot.ToInt())
       .StoreInArrayLiteral(reg, reg, store_array_element_slot.ToInt());
+
+  // Emit Iterator-protocol operations
+  builder.GetIterator(reg, load_slot.ToInt(), call_slot.ToInt());
 
   // Emit load / store lookup slots.
   builder.LoadLookupSlot(name, TypeofMode::NOT_INSIDE_TYPEOF)
@@ -167,7 +173,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .LoadLookupGlobalSlot(name, TypeofMode::INSIDE_TYPEOF, 1, 0);
 
   // Emit closure operations.
-  builder.CreateClosure(0, 1, NOT_TENURED);
+  builder.CreateClosure(0, 1, static_cast<int>(AllocationType::kYoung));
 
   // Emit create context operation.
   builder.CreateBlockContext(&scope);
@@ -179,7 +185,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   // Emit literal creation operations.
   builder.CreateRegExpLiteral(ast_factory.GetOneByteString("a"), 0, 0);
   builder.CreateArrayLiteral(0, 0, 0);
-  builder.CreateObjectLiteral(0, 0, 0, reg);
+  builder.CreateObjectLiteral(0, 0, 0);
 
   // Emit tagged template operations.
   builder.GetTemplateObject(0, 0);
@@ -259,7 +265,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CompareOperation(Token::Value::GTE, reg, 6)
       .CompareTypeOf(TestTypeOfFlags::LiteralFlag::kNumber)
       .CompareOperation(Token::Value::INSTANCEOF, reg, 7)
-      .CompareOperation(Token::Value::IN, reg)
+      .CompareOperation(Token::Value::IN, reg, 8)
       .CompareReference(reg)
       .CompareUndetectable()
       .CompareUndefined()
@@ -278,10 +284,12 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
 
   // Short jumps with Imm8 operands
   {
-    BytecodeLabel start, after_jump1, after_jump2, after_jump3, after_jump4,
+    BytecodeLoopHeader loop_header;
+    BytecodeLabel after_jump1, after_jump2, after_jump3, after_jump4,
         after_jump5, after_jump6, after_jump7, after_jump8, after_jump9,
-        after_jump10;
-    builder.Bind(&start)
+        after_jump10, after_jump11, after_loop;
+    builder.JumpIfNull(&after_loop)
+        .Bind(&loop_header)
         .Jump(&after_jump1)
         .Bind(&after_jump1)
         .JumpIfNull(&after_jump2)
@@ -292,24 +300,28 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
         .Bind(&after_jump4)
         .JumpIfNotUndefined(&after_jump5)
         .Bind(&after_jump5)
-        .JumpIfJSReceiver(&after_jump6)
+        .JumpIfUndefinedOrNull(&after_jump6)
         .Bind(&after_jump6)
-        .JumpIfTrue(ToBooleanMode::kConvertToBoolean, &after_jump7)
+        .JumpIfJSReceiver(&after_jump7)
         .Bind(&after_jump7)
-        .JumpIfTrue(ToBooleanMode::kAlreadyBoolean, &after_jump8)
+        .JumpIfTrue(ToBooleanMode::kConvertToBoolean, &after_jump8)
         .Bind(&after_jump8)
-        .JumpIfFalse(ToBooleanMode::kConvertToBoolean, &after_jump9)
+        .JumpIfTrue(ToBooleanMode::kAlreadyBoolean, &after_jump9)
         .Bind(&after_jump9)
-        .JumpIfFalse(ToBooleanMode::kAlreadyBoolean, &after_jump10)
+        .JumpIfFalse(ToBooleanMode::kConvertToBoolean, &after_jump10)
         .Bind(&after_jump10)
-        .JumpLoop(&start, 0);
+        .JumpIfFalse(ToBooleanMode::kAlreadyBoolean, &after_jump11)
+        .Bind(&after_jump11)
+        .JumpLoop(&loop_header, 0, 0)
+        .Bind(&after_loop);
   }
 
-  // Longer jumps with constant operands
-  BytecodeLabel end[10];
+  BytecodeLabel end[11];
   {
+    // Longer jumps with constant operands
     BytecodeLabel after_jump;
-    builder.Jump(&end[0])
+    builder.JumpIfNull(&after_jump)
+        .Jump(&end[0])
         .Bind(&after_jump)
         .JumpIfTrue(ToBooleanMode::kConvertToBoolean, &end[1])
         .JumpIfTrue(ToBooleanMode::kAlreadyBoolean, &end[2])
@@ -319,8 +331,9 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
         .JumpIfNotNull(&end[6])
         .JumpIfUndefined(&end[7])
         .JumpIfNotUndefined(&end[8])
+        .JumpIfUndefinedOrNull(&end[9])
         .LoadLiteral(ast_factory.prototype_string())
-        .JumpIfJSReceiver(&end[9]);
+        .JumpIfJSReceiver(&end[10]);
   }
 
   // Emit Smi table switch bytecode.
@@ -330,15 +343,11 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   // Emit set pending message bytecode.
   builder.SetPendingMessage();
 
-  // Emit stack check bytecode.
-  builder.StackCheck(0);
-
   // Emit throw and re-throw in it's own basic block so that the rest of the
   // code isn't omitted due to being dead.
-  BytecodeLabel after_throw;
-  builder.Throw().Bind(&after_throw);
-  BytecodeLabel after_rethrow;
-  builder.ReThrow().Bind(&after_rethrow);
+  BytecodeLabel after_throw, after_rethrow;
+  builder.JumpIfNull(&after_throw).Throw().Bind(&after_throw);
+  builder.JumpIfNull(&after_rethrow).ReThrow().Bind(&after_rethrow);
 
   builder.ForInEnumerate(reg)
       .ForInPrepare(triple, 1)
@@ -372,7 +381,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
                        LookupHoistingMode::kNormal);
 
   // CreateClosureWide
-  builder.CreateClosure(1000, 321, NOT_TENURED);
+  builder.CreateClosure(1000, 321, static_cast<int>(AllocationType::kYoung));
 
   // Emit wide variant of literal creation operations.
   builder
@@ -380,7 +389,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
       .CreateArrayLiteral(0, 0, 0)
       .CreateEmptyArrayLiteral(0)
       .CreateArrayFromIterable()
-      .CreateObjectLiteral(0, 0, 0, reg)
+      .CreateObjectLiteral(0, 0, 0)
       .CreateEmptyObjectLiteral()
       .CloneObject(reg, 0, 0);
 
@@ -412,10 +421,10 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   builder.Debugger();
 
   // Emit abort bytecode.
-  {
-    BytecodeLabel after;
-    builder.Abort(AbortReason::kOperandIsASmi).Bind(&after);
-  }
+  BytecodeLabel after_abort;
+  builder.JumpIfNull(&after_abort)
+      .Abort(AbortReason::kOperandIsASmi)
+      .Bind(&after_abort);
 
   // Insert dummy ops to force longer jumps.
   for (int i = 0; i < 256; i++) {
@@ -438,7 +447,7 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
   ast_factory.Internalize(isolate());
   Handle<BytecodeArray> the_array = builder.ToBytecodeArray(isolate());
   CHECK_EQ(the_array->frame_size(),
-           builder.total_register_count() * kPointerSize);
+           builder.total_register_count() * kSystemPointerSize);
 
   // Build scorecard of bytecodes encountered in the BytecodeArray.
   std::vector<int> scorecard(Bytecodes::ToByte(Bytecode::kLast) + 1);
@@ -481,19 +490,18 @@ TEST_F(BytecodeArrayBuilderTest, AllBytecodesGenerated) {
 #undef CHECK_BYTECODE_PRESENT
 }
 
-
 TEST_F(BytecodeArrayBuilderTest, FrameSizesLookGood) {
   for (int locals = 0; locals < 5; locals++) {
     for (int temps = 0; temps < 3; temps++) {
       BytecodeArrayBuilder builder(zone(), 1, locals);
       BytecodeRegisterAllocator* allocator(builder.register_allocator());
       for (int i = 0; i < locals; i++) {
-        builder.LoadLiteral(Smi::kZero);
+        builder.LoadLiteral(Smi::zero());
         builder.StoreAccumulatorInRegister(Register(i));
       }
       for (int i = 0; i < temps; i++) {
         Register temp = allocator->NewRegister();
-        builder.LoadLiteral(Smi::kZero);
+        builder.LoadLiteral(Smi::zero());
         builder.StoreAccumulatorInRegister(temp);
         // Ensure temporaries are used so not optimized away by the
         // register optimizer.
@@ -503,11 +511,10 @@ TEST_F(BytecodeArrayBuilderTest, FrameSizesLookGood) {
 
       Handle<BytecodeArray> the_array = builder.ToBytecodeArray(isolate());
       int total_registers = locals + temps;
-      CHECK_EQ(the_array->frame_size(), total_registers * kPointerSize);
+      CHECK_EQ(the_array->frame_size(), total_registers * kSystemPointerSize);
     }
   }
 }
-
 
 TEST_F(BytecodeArrayBuilderTest, RegisterValues) {
   int index = 1;
@@ -520,20 +527,18 @@ TEST_F(BytecodeArrayBuilderTest, RegisterValues) {
   CHECK_EQ(actual_index, index);
 }
 
-
 TEST_F(BytecodeArrayBuilderTest, Parameters) {
   BytecodeArrayBuilder builder(zone(), 10, 0);
 
   Register receiver(builder.Receiver());
   Register param8(builder.Parameter(8));
-  CHECK_EQ(param8.index() - receiver.index(), 9);
+  CHECK_EQ(receiver.index() - param8.index(), 9);
 }
-
 
 TEST_F(BytecodeArrayBuilderTest, Constants) {
   BytecodeArrayBuilder builder(zone(), 1, 0);
   AstValueFactory ast_factory(zone(), isolate()->ast_string_constants(),
-                              isolate()->heap()->HashSeed());
+                              HashSeed(isolate()));
 
   double heap_num_1 = 3.14;
   double heap_num_2 = 5.2;
@@ -555,7 +560,7 @@ TEST_F(BytecodeArrayBuilderTest, Constants) {
   ast_factory.Internalize(isolate());
   Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
   // Should only have one entry for each identical constant.
-  EXPECT_EQ(4, array->constant_pool()->length());
+  EXPECT_EQ(4, array->constant_pool().length());
 }
 
 TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
@@ -566,10 +571,11 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   Register reg(0);
   BytecodeLabel far0, far1, far2, far3, far4;
   BytecodeLabel near0, near1, near2, near3, near4;
-  BytecodeLabel after_jump0, after_jump1;
+  BytecodeLabel after_jump_near0, after_jump_far0;
 
-  builder.Jump(&near0)
-      .Bind(&after_jump0)
+  builder.JumpIfNull(&after_jump_near0)
+      .Jump(&near0)
+      .Bind(&after_jump_near0)
       .CompareOperation(Token::Value::EQ, reg, 1)
       .JumpIfTrue(ToBooleanMode::kAlreadyBoolean, &near1)
       .CompareOperation(Token::Value::EQ, reg, 2)
@@ -583,8 +589,9 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
       .Bind(&near2)
       .Bind(&near3)
       .Bind(&near4)
+      .JumpIfNull(&after_jump_far0)
       .Jump(&far0)
-      .Bind(&after_jump1)
+      .Bind(&after_jump_far0)
       .CompareOperation(Token::Value::EQ, reg, 3)
       .JumpIfTrue(ToBooleanMode::kAlreadyBoolean, &far1)
       .CompareOperation(Token::Value::EQ, reg, 4)
@@ -600,9 +607,13 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   builder.Return();
 
   Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
-  DCHECK_EQ(array->length(), 44 + kFarJumpDistance - 22 + 1);
+  DCHECK_EQ(array->length(), 48 + kFarJumpDistance - 22 + 1);
 
   BytecodeArrayIterator iterator(array);
+
+  // Ignore JumpIfNull operation.
+  iterator.Advance();
+
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJump);
   CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 22);
   iterator.Advance();
@@ -635,8 +646,11 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 2);
   iterator.Advance();
 
+  // Ignore JumpIfNull operation.
+  iterator.Advance();
+
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpConstant);
-  CHECK_EQ(iterator.GetConstantForIndexOperand(0),
+  CHECK_EQ(*(iterator.GetConstantForIndexOperand(0, isolate())),
            Smi::FromInt(kFarJumpDistance));
   iterator.Advance();
 
@@ -644,7 +658,7 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpIfTrueConstant);
-  CHECK_EQ(iterator.GetConstantForIndexOperand(0),
+  CHECK_EQ(*(iterator.GetConstantForIndexOperand(0, isolate())),
            Smi::FromInt(kFarJumpDistance - 5));
   iterator.Advance();
 
@@ -652,7 +666,7 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpIfFalseConstant);
-  CHECK_EQ(iterator.GetConstantForIndexOperand(0),
+  CHECK_EQ(*(iterator.GetConstantForIndexOperand(0, isolate())),
            Smi::FromInt(kFarJumpDistance - 10));
   iterator.Advance();
 
@@ -660,7 +674,7 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
   iterator.Advance();
 
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpIfToBooleanTrueConstant);
-  CHECK_EQ(iterator.GetConstantForIndexOperand(0),
+  CHECK_EQ(*(iterator.GetConstantForIndexOperand(0, isolate())),
            Smi::FromInt(kFarJumpDistance - 15));
   iterator.Advance();
 
@@ -669,22 +683,34 @@ TEST_F(BytecodeArrayBuilderTest, ForwardJumps) {
 
   CHECK_EQ(iterator.current_bytecode(),
            Bytecode::kJumpIfToBooleanFalseConstant);
-  CHECK_EQ(iterator.GetConstantForIndexOperand(0),
+  CHECK_EQ(*(iterator.GetConstantForIndexOperand(0, isolate())),
            Smi::FromInt(kFarJumpDistance - 20));
   iterator.Advance();
 }
-
 
 TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
   BytecodeArrayBuilder builder(zone(), 1, 1);
 
   Register reg(0);
 
-  BytecodeLabel label0;
-  builder.Bind(&label0).JumpLoop(&label0, 0);
+  BytecodeLabel end;
+  builder.JumpIfNull(&end);
+
+  BytecodeLabel after_loop;
+  // Conditional jump to force the code after the JumpLoop to be live.
+  // Technically this jump is illegal because it's jumping into the middle of
+  // the subsequent loops, but that's ok for this unit test.
+  BytecodeLoopHeader loop_header;
+  builder.JumpIfNull(&after_loop)
+      .Bind(&loop_header)
+      .JumpLoop(&loop_header, 0, 0)
+      .Bind(&after_loop);
   for (int i = 0; i < 42; i++) {
-    BytecodeLabel after_jump;
-    builder.JumpLoop(&label0, 0).Bind(&after_jump);
+    BytecodeLabel after_loop;
+    // Conditional jump to force the code after the JumpLoop to be live.
+    builder.JumpIfNull(&after_loop)
+        .JumpLoop(&loop_header, 0, 0)
+        .Bind(&after_loop);
   }
 
   // Add padding to force wide backwards jumps.
@@ -692,21 +718,28 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
     builder.Debugger();
   }
 
-  builder.JumpLoop(&label0, 0);
-  BytecodeLabel end;
+  builder.JumpLoop(&loop_header, 0, 0);
   builder.Bind(&end);
   builder.Return();
 
   Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
   BytecodeArrayIterator iterator(array);
+  // Ignore the JumpIfNull to the end
+  iterator.Advance();
+  // Ignore the JumpIfNull to after the first JumpLoop
+  iterator.Advance();
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
   CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 0);
   iterator.Advance();
   for (unsigned i = 0; i < 42; i++) {
+    // Ignore the JumpIfNull to after the JumpLoop
+    iterator.Advance();
+
     CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
     CHECK_EQ(iterator.current_operand_scale(), OperandScale::kSingle);
-    // offset of 3 (because kJumpLoop takes two immediate operands)
-    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), i * 3 + 3);
+    // offset of 5 (because kJumpLoop takes two immediate operands and
+    // JumpIfNull takes 1)
+    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), i * 5 + 5);
     iterator.Advance();
   }
   // Check padding to force wide backwards jumps.
@@ -716,7 +749,7 @@ TEST_F(BytecodeArrayBuilderTest, BackwardJumps) {
   }
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
   CHECK_EQ(iterator.current_operand_scale(), OperandScale::kDouble);
-  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 386);
+  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 42 * 5 + 256 + 4);
   iterator.Advance();
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kReturn);
   iterator.Advance();
@@ -814,71 +847,6 @@ TEST_F(BytecodeArrayBuilderTest, WideSwitch) {
     iterator.Advance();
   }
 
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kReturn);
-  iterator.Advance();
-  CHECK(iterator.done());
-}
-
-TEST_F(BytecodeArrayBuilderTest, LabelReuse) {
-  BytecodeArrayBuilder builder(zone(), 1, 0);
-
-  // Labels can only have 1 forward reference, but
-  // can be referred to mulitple times once bound.
-  BytecodeLabel label, after_jump0, after_jump1;
-
-  builder.Jump(&label)
-      .Bind(&label)
-      .JumpLoop(&label, 0)
-      .Bind(&after_jump0)
-      .JumpLoop(&label, 0)
-      .Bind(&after_jump1)
-      .Return();
-
-  Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
-  BytecodeArrayIterator iterator(array);
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kJump);
-  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 2);
-  iterator.Advance();
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
-  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 0);
-  iterator.Advance();
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
-  CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 3);
-  iterator.Advance();
-  CHECK_EQ(iterator.current_bytecode(), Bytecode::kReturn);
-  iterator.Advance();
-  CHECK(iterator.done());
-}
-
-
-TEST_F(BytecodeArrayBuilderTest, LabelAddressReuse) {
-  static const int kRepeats = 3;
-
-  BytecodeArrayBuilder builder(zone(), 1, 0);
-  for (int i = 0; i < kRepeats; i++) {
-    BytecodeLabel label, after_jump0, after_jump1;
-    builder.Jump(&label)
-        .Bind(&label)
-        .JumpLoop(&label, 0)
-        .Bind(&after_jump0)
-        .JumpLoop(&label, 0)
-        .Bind(&after_jump1);
-  }
-  builder.Return();
-
-  Handle<BytecodeArray> array = builder.ToBytecodeArray(isolate());
-  BytecodeArrayIterator iterator(array);
-  for (int i = 0; i < kRepeats; i++) {
-    CHECK_EQ(iterator.current_bytecode(), Bytecode::kJump);
-    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 2);
-    iterator.Advance();
-    CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
-    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 0);
-    iterator.Advance();
-    CHECK_EQ(iterator.current_bytecode(), Bytecode::kJumpLoop);
-    CHECK_EQ(iterator.GetUnsignedImmediateOperand(0), 3);
-    iterator.Advance();
-  }
   CHECK_EQ(iterator.current_bytecode(), Bytecode::kReturn);
   iterator.Advance();
   CHECK(iterator.done());

@@ -25,11 +25,15 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# for py2/py3 compatibility
+from __future__ import print_function
+from __future__ import absolute_import
+
 import os
 import re
 
-from variants import ALL_VARIANTS
-from utils import Freeze
+from .variants import ALL_VARIANTS
+from .utils import Freeze
 
 # Possible outcomes
 FAIL = "FAIL"
@@ -45,18 +49,18 @@ FAIL_SLOPPY = "FAIL_SLOPPY"
 SKIP = "SKIP"
 SLOW = "SLOW"
 NO_VARIANTS = "NO_VARIANTS"
+FAIL_PHASE_ONLY = "FAIL_PHASE_ONLY"
 
 ALWAYS = "ALWAYS"
 
 KEYWORDS = {}
 for key in [SKIP, FAIL, PASS, CRASH, SLOW, FAIL_OK, NO_VARIANTS, FAIL_SLOPPY,
-            ALWAYS]:
+            ALWAYS, FAIL_PHASE_ONLY]:
   KEYWORDS[key] = key
 
 # Support arches, modes to be written as keywords instead of strings.
 VARIABLES = {ALWAYS: True}
 for var in ["debug", "release", "big", "little", "android",
-            "android_arm", "android_arm64", "android_ia32", "android_x64",
             "arm", "arm64", "ia32", "mips", "mipsel", "mips64", "mips64el",
             "x64", "ppc", "ppc64", "s390", "s390x", "macos", "windows",
             "linux", "aix", "r1", "r2", "r3", "r5", "r6"]:
@@ -72,6 +76,7 @@ class StatusFile(object):
     _rules:        {variant: {test name: [rule]}}
     _prefix_rules: {variant: {test name prefix: [rule]}}
     """
+    self.variables = variables
     with open(path) as f:
       self._rules, self._prefix_rules = ReadStatusFile(f.read(), variables)
 
@@ -132,7 +137,7 @@ class StatusFile(object):
             variant_desc = 'variant independent'
           else:
             variant_desc = 'variant: %s' % variant
-          print 'Unused rule: %s -> %s (%s)' % (rule, value, variant_desc)
+          print('Unused rule: %s -> %s (%s)' % (rule, value, variant_desc))
 
 
 def _JoinsPassAndFail(outcomes1, outcomes2):
@@ -296,6 +301,8 @@ JS_TEST_PATHS = {
   'webkit': [[]],
 }
 
+FILE_EXTENSIONS = [".js", ".mjs"]
+
 def PresubmitCheck(path):
   with open(path) as f:
     contents = ReadContent(f.read())
@@ -322,11 +329,14 @@ def PresubmitCheck(path):
         _assert('*' not in rule or (rule.count('*') == 1 and rule[-1] == '*'),
                 "Only the last character of a rule key can be a wildcard")
         if basename in JS_TEST_PATHS  and '*' not in rule:
-          _assert(any(os.path.exists(os.path.join(os.path.dirname(path),
-                                                  *(paths + [rule + ".js"])))
+          def _any_exist(paths):
+            return any(os.path.exists(os.path.join(os.path.dirname(path),
+                                      *(paths + [rule + ext])))
+                       for ext in FILE_EXTENSIONS)
+          _assert(any(_any_exist(paths)
                       for paths in JS_TEST_PATHS[basename]),
                   "missing file for %s test %s" % (basename, rule))
     return status["success"]
   except Exception as e:
-    print e
+    print(e)
     return False

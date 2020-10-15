@@ -12,7 +12,7 @@
 #include "src/compiler/node-properties.h"
 #include "src/compiler/simplified-operator.h"
 #include "src/compiler/type-cache.h"
-#include "src/isolate-inl.h"
+#include "src/execution/isolate-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -26,9 +26,9 @@ TypedOptimization::TypedOptimization(Editor* editor,
       jsgraph_(jsgraph),
       broker_(broker),
       true_type_(
-          Type::HeapConstant(broker, factory()->true_value(), graph()->zone())),
-      false_type_(Type::HeapConstant(broker, factory()->false_value(),
-                                     graph()->zone())),
+          Type::Constant(broker, factory()->true_value(), graph()->zone())),
+      false_type_(
+          Type::Constant(broker, factory()->false_value(), graph()->zone())),
       type_cache_(TypeCache::Get()) {}
 
 TypedOptimization::~TypedOptimization() = default;
@@ -38,8 +38,12 @@ Reduction TypedOptimization::Reduce(Node* node) {
   switch (node->opcode()) {
     case IrOpcode::kConvertReceiver:
       return ReduceConvertReceiver(node);
+    case IrOpcode::kMaybeGrowFastElements:
+      return ReduceMaybeGrowFastElements(node);
     case IrOpcode::kCheckHeapObject:
       return ReduceCheckHeapObject(node);
+    case IrOpcode::kCheckBounds:
+      return ReduceCheckBounds(node);
     case IrOpcode::kCheckNotTaggedHole:
       return ReduceCheckNotTaggedHole(node);
     case IrOpcode::kCheckMaps:
@@ -84,6 +88,17 @@ Reduction TypedOptimization::Reduce(Node* node) {
       return ReduceToBoolean(node);
     case IrOpcode::kSpeculativeToNumber:
       return ReduceSpeculativeToNumber(node);
+    case IrOpcode::kSpeculativeNumberAdd:
+      return ReduceSpeculativeNumberAdd(node);
+    case IrOpcode::kSpeculativeNumberSubtract:
+    case IrOpcode::kSpeculativeNumberMultiply:
+    case IrOpcode::kSpeculativeNumberDivide:
+    case IrOpcode::kSpeculativeNumberModulus:
+      return ReduceSpeculativeNumberBinop(node);
+    case IrOpcode::kSpeculativeNumberEqual:
+    case IrOpcode::kSpeculativeNumberLessThan:
+    case IrOpcode::kSpeculativeNumberLessThanOrEqual:
+      return ReduceSpeculativeNumberComparison(node);
     default:
       break;
   }
@@ -100,6 +115,26 @@ base::Optional<MapRef> GetStableMapFromObjectType(JSHeapBroker* broker,
     if (object_map.is_stable()) return object_map;
   }
   return {};
+}
+
+Node* ResolveSameValueRenames(Node* node) {
+  while (true) {
+    switch (node->opcode()) {
+      case IrOpcode::kCheckHeapObject:
+      case IrOpcode::kCheckNumber:
+      case IrOpcode::kCheckSmi:
+      case IrOpcode::kFinishRegion:
+      case IrOpcode::kTypeGuard:
+        if (node->IsDead()) {
+          return node;
+        } else {
+          node = node->InputAt(0);
+          continue;
+        }
+      default:
+        return node;
+    }
+  }
 }
 
 }  // namespace
@@ -124,6 +159,48 @@ Reduction TypedOptimization::ReduceCheckHeapObject(Node* node) {
   if (!input_type.Maybe(Type::SignedSmall())) {
     ReplaceWithValue(node, input);
     return Replace(input);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceMaybeGrowFastElements(Node* node) {
+  Node* const elements = NodeProperties::GetValueInput(node, 1);
+  Node* const index = NodeProperties::GetValueInput(node, 2);
+  Node* const length = NodeProperties::GetValueInput(node, 3);
+  Node* const effect = NodeProperties::GetEffectInput(node);
+  Node* const control = NodeProperties::GetControlInput(node);
+
+  Type const index_type = NodeProperties::GetType(index);
+  Type const length_type = NodeProperties::GetType(length);
+  CHECK(index_type.Is(Type::Unsigned31()));
+  CHECK(length_type.Is(Type::Unsigned31()));
+
+  if (!index_type.IsNone() && !length_type.IsNone() &&
+      index_type.Max() < length_type.Min()) {
+    Node* check_bounds = graph()->NewNode(
+        simplified()->CheckBounds(FeedbackSource{},
+                                  CheckBoundsFlag::kAbortOnOutOfBounds),
+        index, length, effect, control);
+    ReplaceWithValue(node, elements, check_bounds);
+    return Replace(check_bounds);
+  }
+
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceCheckBounds(Node* node) {
+  CheckBoundsParameters const& p = CheckBoundsParametersOf(node->op());
+  Node* const input = NodeProperties::GetValueInput(node, 0);
+  Type const input_type = NodeProperties::GetType(input);
+  if (p.flags() & CheckBoundsFlag::kConvertStringAndMinusZero &&
+      !input_type.Maybe(Type::String()) &&
+      !input_type.Maybe(Type::MinusZero())) {
+    NodeProperties::ChangeOp(
+        node,
+        simplified()->CheckBounds(
+            p.check_parameters().feedback(),
+            p.flags().without(CheckBoundsFlag::kConvertStringAndMinusZero)));
+    return Changed(node);
   }
   return NoChange();
 }
@@ -233,7 +310,7 @@ Reduction TypedOptimization::ReduceLoadField(Node* node) {
 Reduction TypedOptimization::ReduceNumberFloor(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type const input_type = NodeProperties::GetType(input);
-  if (input_type.Is(type_cache_.kIntegerOrMinusZeroOrNaN)) {
+  if (input_type.Is(type_cache_->kIntegerOrMinusZeroOrNaN)) {
     return Replace(input);
   }
   if (input_type.Is(Type::PlainNumber()) &&
@@ -254,7 +331,7 @@ Reduction TypedOptimization::ReduceNumberFloor(Node* node) {
       //   NumberToUint32(NumberDivide(lhs, rhs))
       //
       // and just smash the type [0...lhs.Max] on the {node},
-      // as the truncated result must be loewr than {lhs}'s maximum
+      // as the truncated result must be lower than {lhs}'s maximum
       // value (note that {rhs} cannot be less than 1 due to the
       // plain-number type constraint on the {node}).
       NodeProperties::ChangeOp(node, simplified()->NumberToUint32());
@@ -269,7 +346,7 @@ Reduction TypedOptimization::ReduceNumberFloor(Node* node) {
 Reduction TypedOptimization::ReduceNumberRoundop(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type const input_type = NodeProperties::GetType(input);
-  if (input_type.Is(type_cache_.kIntegerOrMinusZeroOrNaN)) {
+  if (input_type.Is(type_cache_->kIntegerOrMinusZeroOrNaN)) {
     return Replace(input);
   }
   return NoChange();
@@ -287,7 +364,7 @@ Reduction TypedOptimization::ReduceNumberSilenceNaN(Node* node) {
 Reduction TypedOptimization::ReduceNumberToUint8Clamped(Node* node) {
   Node* const input = NodeProperties::GetValueInput(node, 0);
   Type const input_type = NodeProperties::GetType(input);
-  if (input_type.Is(type_cache_.kUint8)) {
+  if (input_type.Is(type_cache_->kUint8)) {
     return Replace(input);
   }
   return NoChange();
@@ -298,6 +375,12 @@ Reduction TypedOptimization::ReducePhi(Node* node) {
   // after lowering based on types, i.e. a SpeculativeNumberAdd has a more
   // precise type than the JSAdd that was in the graph when the Typer was run.
   DCHECK_EQ(IrOpcode::kPhi, node->opcode());
+  // Prevent new types from being propagated through loop-related Phis for now.
+  // This is to avoid slow convergence of type narrowing when we learn very
+  // precise information about loop variables.
+  if (NodeProperties::GetControlInput(node, 0)->opcode() == IrOpcode::kLoop) {
+    return NoChange();
+  }
   int arity = node->op()->ValueInputCount();
   Type type = NodeProperties::GetType(node->InputAt(0));
   for (int i = 1; i < arity; ++i) {
@@ -391,7 +474,7 @@ TypedOptimization::TryReduceStringComparisonOfStringFromSingleCharCode(
   const Operator* comparison_op = NumberComparisonFor(comparison->op());
   Node* from_char_code_repl = NodeProperties::GetValueInput(from_char_code, 0);
   Type from_char_code_repl_type = NodeProperties::GetType(from_char_code_repl);
-  if (!from_char_code_repl_type.Is(type_cache_.kUint16)) {
+  if (!from_char_code_repl_type.Is(type_cache_->kUint16)) {
     // Convert to signed int32 to satisfy type of {NumberBitwiseAnd}.
     from_char_code_repl =
         graph()->NewNode(simplified()->NumberToInt32(), from_char_code_repl);
@@ -437,14 +520,14 @@ Reduction TypedOptimization::ReduceStringComparison(Node* node) {
       Node* right = NodeProperties::GetValueInput(rhs, 0);
       Type left_type = NodeProperties::GetType(left);
       Type right_type = NodeProperties::GetType(right);
-      if (!left_type.Is(type_cache_.kUint16)) {
+      if (!left_type.Is(type_cache_->kUint16)) {
         // Convert to signed int32 to satisfy type of {NumberBitwiseAnd}.
         left = graph()->NewNode(simplified()->NumberToInt32(), left);
         left = graph()->NewNode(
             simplified()->NumberBitwiseAnd(), left,
             jsgraph()->Constant(std::numeric_limits<uint16_t>::max()));
       }
-      if (!right_type.Is(type_cache_.kUint16)) {
+      if (!right_type.Is(type_cache_->kUint16)) {
         // Convert to signed int32 to satisfy type of {NumberBitwiseAnd}.
         right = graph()->NewNode(simplified()->NumberToInt32(), right);
         right = graph()->NewNode(
@@ -496,7 +579,10 @@ Reduction TypedOptimization::ReduceSameValue(Node* node) {
   Node* const rhs = NodeProperties::GetValueInput(node, 1);
   Type const lhs_type = NodeProperties::GetType(lhs);
   Type const rhs_type = NodeProperties::GetType(rhs);
-  if (lhs == rhs) {
+  if (ResolveSameValueRenames(lhs) == ResolveSameValueRenames(rhs)) {
+    if (NodeProperties::GetType(node).IsNone()) {
+      return NoChange();
+    }
     // SameValue(x,x) => #true
     return Replace(jsgraph()->TrueConstant());
   } else if (lhs_type.Is(Type::Unique()) && rhs_type.Is(Type::Unique())) {
@@ -660,6 +746,147 @@ Reduction TypedOptimization::ReduceToBoolean(Node* node) {
     node->TrimInputCount(1);
     NodeProperties::ChangeOp(node, simplified()->BooleanNot());
     return Changed(node);
+  }
+  return NoChange();
+}
+
+namespace {
+bool BothAre(Type t1, Type t2, Type t3) { return t1.Is(t3) && t2.Is(t3); }
+
+bool NeitherCanBe(Type t1, Type t2, Type t3) {
+  return !t1.Maybe(t3) && !t2.Maybe(t3);
+}
+
+const Operator* NumberOpFromSpeculativeNumberOp(
+    SimplifiedOperatorBuilder* simplified, const Operator* op) {
+  switch (op->opcode()) {
+    case IrOpcode::kSpeculativeNumberEqual:
+      return simplified->NumberEqual();
+    case IrOpcode::kSpeculativeNumberLessThan:
+      return simplified->NumberLessThan();
+    case IrOpcode::kSpeculativeNumberLessThanOrEqual:
+      return simplified->NumberLessThanOrEqual();
+    case IrOpcode::kSpeculativeNumberAdd:
+      // Handled by ReduceSpeculativeNumberAdd.
+      UNREACHABLE();
+    case IrOpcode::kSpeculativeNumberSubtract:
+      return simplified->NumberSubtract();
+    case IrOpcode::kSpeculativeNumberMultiply:
+      return simplified->NumberMultiply();
+    case IrOpcode::kSpeculativeNumberDivide:
+      return simplified->NumberDivide();
+    case IrOpcode::kSpeculativeNumberModulus:
+      return simplified->NumberModulus();
+    default:
+      break;
+  }
+  UNREACHABLE();
+}
+
+}  // namespace
+
+Reduction TypedOptimization::ReduceSpeculativeNumberAdd(Node* node) {
+  Node* const lhs = NodeProperties::GetValueInput(node, 0);
+  Node* const rhs = NodeProperties::GetValueInput(node, 1);
+  Type const lhs_type = NodeProperties::GetType(lhs);
+  Type const rhs_type = NodeProperties::GetType(rhs);
+  NumberOperationHint hint = NumberOperationHintOf(node->op());
+  if ((hint == NumberOperationHint::kNumber ||
+       hint == NumberOperationHint::kNumberOrOddball) &&
+      BothAre(lhs_type, rhs_type, Type::PlainPrimitive()) &&
+      NeitherCanBe(lhs_type, rhs_type, Type::StringOrReceiver())) {
+    // SpeculativeNumberAdd(x:-string, y:-string) =>
+    //     NumberAdd(ToNumber(x), ToNumber(y))
+    Node* const toNum_lhs = ConvertPlainPrimitiveToNumber(lhs);
+    Node* const toNum_rhs = ConvertPlainPrimitiveToNumber(rhs);
+    Node* const value =
+        graph()->NewNode(simplified()->NumberAdd(), toNum_lhs, toNum_rhs);
+    ReplaceWithValue(node, value);
+    return Replace(value);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceJSToNumberInput(Node* input) {
+  // Try constant-folding of JSToNumber with constant inputs.
+  Type input_type = NodeProperties::GetType(input);
+
+  if (input_type.Is(Type::String())) {
+    HeapObjectMatcher m(input);
+    if (m.HasValue() && m.Ref(broker()).IsString()) {
+      StringRef input_value = m.Ref(broker()).AsString();
+      double number;
+      ASSIGN_RETURN_NO_CHANGE_IF_DATA_MISSING(number, input_value.ToNumber());
+      return Replace(jsgraph()->Constant(number));
+    }
+  }
+  if (input_type.IsHeapConstant()) {
+    HeapObjectRef input_value = input_type.AsHeapConstant()->Ref();
+    double value;
+    if (input_value.OddballToNumber().To(&value)) {
+      return Replace(jsgraph()->Constant(value));
+    }
+  }
+  if (input_type.Is(Type::Number())) {
+    // JSToNumber(x:number) => x
+    return Changed(input);
+  }
+  if (input_type.Is(Type::Undefined())) {
+    // JSToNumber(undefined) => #NaN
+    return Replace(jsgraph()->NaNConstant());
+  }
+  if (input_type.Is(Type::Null())) {
+    // JSToNumber(null) => #0
+    return Replace(jsgraph()->ZeroConstant());
+  }
+  return NoChange();
+}
+
+Node* TypedOptimization::ConvertPlainPrimitiveToNumber(Node* node) {
+  DCHECK(NodeProperties::GetType(node).Is(Type::PlainPrimitive()));
+  // Avoid inserting too many eager ToNumber() operations.
+  Reduction const reduction = ReduceJSToNumberInput(node);
+  if (reduction.Changed()) return reduction.replacement();
+  if (NodeProperties::GetType(node).Is(Type::Number())) {
+    return node;
+  }
+  return graph()->NewNode(simplified()->PlainPrimitiveToNumber(), node);
+}
+
+Reduction TypedOptimization::ReduceSpeculativeNumberBinop(Node* node) {
+  Node* const lhs = NodeProperties::GetValueInput(node, 0);
+  Node* const rhs = NodeProperties::GetValueInput(node, 1);
+  Type const lhs_type = NodeProperties::GetType(lhs);
+  Type const rhs_type = NodeProperties::GetType(rhs);
+  NumberOperationHint hint = NumberOperationHintOf(node->op());
+  if ((hint == NumberOperationHint::kNumber ||
+       hint == NumberOperationHint::kNumberOrOddball) &&
+      BothAre(lhs_type, rhs_type, Type::NumberOrUndefinedOrNullOrBoolean())) {
+    // We intentionally do this only in the Number and NumberOrOddball hint case
+    // because simplified lowering of these speculative ops may do some clever
+    // reductions in the other cases.
+    Node* const toNum_lhs = ConvertPlainPrimitiveToNumber(lhs);
+    Node* const toNum_rhs = ConvertPlainPrimitiveToNumber(rhs);
+    Node* const value = graph()->NewNode(
+        NumberOpFromSpeculativeNumberOp(simplified(), node->op()), toNum_lhs,
+        toNum_rhs);
+    ReplaceWithValue(node, value);
+    return Replace(value);
+  }
+  return NoChange();
+}
+
+Reduction TypedOptimization::ReduceSpeculativeNumberComparison(Node* node) {
+  Node* const lhs = NodeProperties::GetValueInput(node, 0);
+  Node* const rhs = NodeProperties::GetValueInput(node, 1);
+  Type const lhs_type = NodeProperties::GetType(lhs);
+  Type const rhs_type = NodeProperties::GetType(rhs);
+  if (BothAre(lhs_type, rhs_type, Type::Signed32()) ||
+      BothAre(lhs_type, rhs_type, Type::Unsigned32())) {
+    Node* const value = graph()->NewNode(
+        NumberOpFromSpeculativeNumberOp(simplified(), node->op()), lhs, rhs);
+    ReplaceWithValue(node, value);
+    return Replace(value);
   }
   return NoChange();
 }

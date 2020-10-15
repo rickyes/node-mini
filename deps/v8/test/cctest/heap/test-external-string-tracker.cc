@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/api-inl.h"
-#include "src/api.h"
+#include "src/api/api-inl.h"
+#include "src/api/api.h"
+#include "src/execution/isolate.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/spaces.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-tester.h"
 #include "test/cctest/heap/heap-utils.h"
@@ -112,7 +113,7 @@ TEST(ExternalString_ExternalBackingStoreSizeIncreasesMarkCompact) {
         isolate, new TestOneByteResource(i::StrDup(TEST_STR))).ToLocalChecked();
     v8::internal::Handle<v8::internal::String> esh = v8::Utils::OpenHandle(*es);
 
-    Page* page_before_gc = Page::FromAddress(esh->address());
+    Page* page_before_gc = Page::FromHeapObject(*esh);
     heap::ForceEvacuationCandidate(page_before_gc);
 
     CcTest::CollectAllGarbage();
@@ -129,6 +130,7 @@ TEST(ExternalString_ExternalBackingStoreSizeIncreasesMarkCompact) {
 }
 
 TEST(ExternalString_ExternalBackingStoreSizeIncreasesAfterExternalization) {
+  ManualGCScope manual_gc_scope;
   CcTest::InitializeVM();
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
@@ -146,8 +148,7 @@ TEST(ExternalString_ExternalBackingStoreSizeIncreasesAfterExternalization) {
 
     // Allocate normal string in the new gen.
     v8::Local<v8::String> str =
-        v8::String::NewFromUtf8(isolate, TEST_STR, v8::NewStringType::kNormal)
-            .ToLocalChecked();
+        v8::String::NewFromUtf8Literal(isolate, TEST_STR);
 
     CHECK_EQ(0, heap->new_space()->ExternalBackingStoreBytes(type) -
                     new_backing_store_before);
@@ -171,6 +172,7 @@ TEST(ExternalString_ExternalBackingStoreSizeIncreasesAfterExternalization) {
 }
 
 TEST(ExternalString_PromotedThinString) {
+  if (FLAG_single_generation) return;
   ManualGCScope manual_gc_scope;
   CcTest::InitializeVM();
   LocalContext env;
@@ -193,13 +195,12 @@ TEST(ExternalString_PromotedThinString) {
     i::Handle<i::String> isymbol1 = factory->InternalizeString(string1);
     CHECK(isymbol1->IsInternalizedString());
     CHECK(string1->IsExternalString());
-    CHECK(!heap->InNewSpace(*isymbol1));
+    CHECK(!heap->InYoungGeneration(*isymbol1));
 
     // New external string in the young space. This string has the same content
     // as the previous one (that was already internalized).
     v8::Local<v8::String> string2 =
-        v8::String::NewFromUtf8(isolate, TEST_STR, v8::NewStringType::kNormal)
-            .ToLocalChecked();
+        v8::String::NewFromUtf8Literal(isolate, TEST_STR);
     bool success =
         string2->MakeExternal(new TestOneByteResource(i::StrDup(TEST_STR)));
     CHECK(success);
@@ -209,7 +210,7 @@ TEST(ExternalString_PromotedThinString) {
     i::Handle<i::String> isymbol2 = factory->InternalizeString(istring);
     CHECK(isymbol2->IsInternalizedString());
     CHECK(istring->IsThinString());
-    CHECK(heap->InNewSpace(*istring));
+    CHECK(heap->InYoungGeneration(*istring));
 
     // Collect thin string. References to the thin string will be updated to
     // point to the actual external string in the old space.

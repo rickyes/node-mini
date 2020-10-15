@@ -5,7 +5,7 @@
 #ifndef V8_BUILTINS_BUILTINS_PROXY_GEN_H_
 #define V8_BUILTINS_BUILTINS_PROXY_GEN_H_
 
-#include "src/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler.h"
 #include "src/objects/js-proxy.h"
 
 namespace v8 {
@@ -17,37 +17,30 @@ class ProxiesCodeStubAssembler : public CodeStubAssembler {
   explicit ProxiesCodeStubAssembler(compiler::CodeAssemblerState* state)
       : CodeStubAssembler(state) {}
 
-  // ES6 section 9.5.8 [[Get]] ( P, Receiver )
-  // name should not be an index.
-  Node* ProxyGetProperty(Node* context, Node* proxy, Node* name,
-                         Node* receiver);
+  TNode<JSProxy> AllocateProxy(TNode<Context> context, TNode<JSReceiver> target,
+                               TNode<JSReceiver> handler);
+  TNode<JSFunction> AllocateProxyRevokeFunction(TNode<Context> context,
+                                                TNode<JSProxy> proxy);
 
-  // ES6 section 9.5.9 [[Set]] ( P, V, Receiver )
-  // name should not be an index.
-  Node* ProxySetProperty(Node* context, Node* proxy, Node* name, Node* value,
-                         Node* receiver);
+  void CheckGetSetTrapResult(TNode<Context> context, TNode<JSReceiver> target,
+                             TNode<JSProxy> proxy, TNode<Name> name,
+                             TNode<Object> trap_result,
+                             JSProxy::AccessKind access_kind);
 
- protected:
+  void CheckHasTrapResult(TNode<Context> context, TNode<JSReceiver> target,
+                          TNode<JSProxy> proxy, TNode<Name> name);
+
+  void CheckDeleteTrapResult(TNode<Context> context, TNode<JSReceiver> target,
+                             TNode<JSProxy> proxy, TNode<Name> name);
+
   enum ProxyRevokeFunctionContextSlot {
     kProxySlot = Context::MIN_CONTEXT_SLOTS,
     kProxyContextLength,
   };
 
-  void GotoIfRevokedProxy(Node* object, Label* if_proxy_revoked);
-  Node* AllocateProxy(Node* target, Node* handler, Node* context);
-  Node* AllocateJSArrayForCodeStubArguments(Node* context,
-                                            CodeStubArguments& args, Node* argc,
-                                            ParameterMode mode);
-  Node* AllocateProxyRevokeFunction(Node* proxy, Node* context);
-  void CheckHasTrapResult(Node* context, Node* target, Node* proxy, Node* name,
-                          Label* check_passed, Label* if_bailout);
-
-  void CheckGetSetTrapResult(Node* context, Node* target, Node* proxy,
-                             Node* name, Node* trap_result, Label* if_not_found,
-                             JSProxy::AccessKind access_kind);
-
  private:
-  Node* CreateProxyRevokeFunctionContext(Node* proxy, Node* native_context);
+  TNode<Context> CreateProxyRevokeFunctionContext(
+      TNode<JSProxy> proxy, TNode<NativeContext> native_context);
 };
 
 }  // namespace internal

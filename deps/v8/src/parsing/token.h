@@ -5,9 +5,10 @@
 #ifndef V8_PARSING_TOKEN_H_
 #define V8_PARSING_TOKEN_H_
 
+#include "src/base/bit-field.h"
+#include "src/base/bounds.h"
 #include "src/base/logging.h"
-#include "src/globals.h"
-#include "src/utils.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -20,12 +21,6 @@ namespace internal {
 //
 //   T: Non-keyword tokens
 //   K: Keyword tokens
-//   C: Contextual keyword token
-//
-// Contextual keyword tokens are tokens that are scanned as Token::IDENTIFIER,
-// but that in some contexts are treated as keywords. This mostly happens
-// when ECMAScript introduces new keywords, but for backwards compatibility
-// allows them to still be used as indentifiers in most contexts.
 
 // IGNORE_TOKEN is a convenience macro that can be supplied as
 // an argument (at any position) for a TOKEN_LIST call. It does
@@ -33,20 +28,24 @@ namespace internal {
 
 #define IGNORE_TOKEN(name, string, precedence)
 
-/* Binary operators sorted by precedence */
+/* Binary operators */
+/* ADD and SUB are at the end since they are UnaryOp */
 #define BINARY_OP_TOKEN_LIST(T, E) \
+  E(T, NULLISH, "??", 3)           \
+  E(T, OR, "||", 4)                \
+  E(T, AND, "&&", 5)               \
   E(T, BIT_OR, "|", 6)             \
   E(T, BIT_XOR, "^", 7)            \
   E(T, BIT_AND, "&", 8)            \
   E(T, SHL, "<<", 11)              \
   E(T, SAR, ">>", 11)              \
   E(T, SHR, ">>>", 11)             \
-  E(T, ADD, "+", 12)               \
-  E(T, SUB, "-", 12)               \
   E(T, MUL, "*", 13)               \
   E(T, DIV, "/", 13)               \
   E(T, MOD, "%", 13)               \
-  E(T, EXP, "**", 14)
+  E(T, EXP, "**", 14)              \
+  E(T, ADD, "+", 12)               \
+  E(T, SUB, "-", 12)
 
 #define EXPAND_BINOP_ASSIGN_TOKEN(T, name, string, precedence) \
   T(ASSIGN_##name, string "=", 2)
@@ -54,18 +53,23 @@ namespace internal {
 #define EXPAND_BINOP_TOKEN(T, name, string, precedence) \
   T(name, string, precedence)
 
-#define TOKEN_LIST(T, K, C)                                        \
+#define TOKEN_LIST(T, K)                                           \
                                                                    \
-  /* BEGIN Property */                                             \
   /* BEGIN PropertyOrCall */                                       \
+  /* BEGIN Member */                                               \
+  /* BEGIN Template */                                             \
   /* ES6 Template Literals */                                      \
   T(TEMPLATE_SPAN, nullptr, 0)                                     \
   T(TEMPLATE_TAIL, nullptr, 0)                                     \
+  /* END Template */                                               \
                                                                    \
   /* Punctuators (ECMA-262, section 7.7, page 15). */              \
+  /* BEGIN Property */                                             \
   T(PERIOD, ".", 0)                                                \
   T(LBRACK, "[", 0)                                                \
   /* END Property */                                               \
+  /* END Member */                                                 \
+  T(QUESTION_PERIOD, "?.", 0)                                      \
   T(LPAREN, "(", 0)                                                \
   /* END PropertyOrCall */                                         \
   T(RPAREN, ")", 0)                                                \
@@ -74,9 +78,6 @@ namespace internal {
   T(COLON, ":", 0)                                                 \
   T(ELLIPSIS, "...", 0)                                            \
   T(CONDITIONAL, "?", 3)                                           \
-  T(INC, "++", 0)                                                  \
-  T(DEC, "--", 0)                                                  \
-  T(ARROW, "=>", 0)                                                \
   /* BEGIN AutoSemicolon */                                        \
   T(SEMICOLON, ";", 0)                                             \
   T(RBRACE, "}", 0)                                                \
@@ -84,20 +85,38 @@ namespace internal {
   T(EOS, "EOS", 0)                                                 \
   /* END AutoSemicolon */                                          \
                                                                    \
-  /* Assignment operators. */                                      \
+  /* BEGIN ArrowOrAssignmentOp */                                  \
+  T(ARROW, "=>", 0)                                                \
+  /* BEGIN AssignmentOp */                                         \
   /* IsAssignmentOp() relies on this block of enum values being */ \
   /* contiguous and sorted in the same order! */                   \
   T(INIT, "=init", 2) /* AST-use only. */                          \
   T(ASSIGN, "=", 2)                                                \
   BINARY_OP_TOKEN_LIST(T, EXPAND_BINOP_ASSIGN_TOKEN)               \
+  /* END AssignmentOp */                                           \
+  /* END ArrowOrAssignmentOp */                                    \
                                                                    \
   /* Binary operators sorted by precedence. */                     \
   /* IsBinaryOp() relies on this block of enum values */           \
   /* being contiguous and sorted in the same order! */             \
   T(COMMA, ",", 1)                                                 \
-  T(OR, "||", 4)                                                   \
-  T(AND, "&&", 5)                                                  \
+                                                                   \
+  /* Unary operators, starting at ADD in BINARY_OP_TOKEN_LIST  */  \
+  /* IsUnaryOp() relies on this block of enum values */            \
+  /* being contiguous and sorted in the same order! */             \
   BINARY_OP_TOKEN_LIST(T, EXPAND_BINOP_TOKEN)                      \
+                                                                   \
+  T(NOT, "!", 0)                                                   \
+  T(BIT_NOT, "~", 0)                                               \
+  K(DELETE, "delete", 0)                                           \
+  K(TYPEOF, "typeof", 0)                                           \
+  K(VOID, "void", 0)                                               \
+                                                                   \
+  /* BEGIN IsCountOp */                                            \
+  T(INC, "++", 0)                                                  \
+  T(DEC, "--", 0)                                                  \
+  /* END IsCountOp */                                              \
+  /* END IsUnaryOrCountOp */                                       \
                                                                    \
   /* Compare operators sorted by precedence. */                    \
   /* IsCompareOp() relies on this block of enum values */          \
@@ -112,15 +131,6 @@ namespace internal {
   T(GTE, ">=", 10)                                                 \
   K(INSTANCEOF, "instanceof", 10)                                  \
   K(IN, "in", 10)                                                  \
-                                                                   \
-  /* Unary operators. */                                           \
-  /* IsUnaryOp() relies on this block of enum values */            \
-  /* being contiguous and sorted in the same order! */             \
-  T(NOT, "!", 0)                                                   \
-  T(BIT_NOT, "~", 0)                                               \
-  K(DELETE, "delete", 0)                                           \
-  K(TYPEOF, "typeof", 0)                                           \
-  K(VOID, "void", 0)                                               \
                                                                    \
   /* Keywords (ECMA-262, section 7.5.2, page 13). */               \
   K(BREAK, "break", 0)                                             \
@@ -164,6 +174,8 @@ namespace internal {
   /* BEGIN AnyIdentifier */                                        \
   /* Identifiers (not keywords or future reserved words). */       \
   T(IDENTIFIER, nullptr, 0)                                        \
+  K(GET, "get", 0)                                                 \
+  K(SET, "set", 0)                                                 \
   K(ASYNC, "async", 0)                                             \
   /* `await` is a reserved word in module code only */             \
   K(AWAIT, "await", 0)                                             \
@@ -173,9 +185,9 @@ namespace internal {
   /* Future reserved words (ECMA-262, section 7.6.1.2). */         \
   T(FUTURE_STRICT_RESERVED_WORD, nullptr, 0)                       \
   T(ESCAPED_STRICT_RESERVED_WORD, nullptr, 0)                      \
-  K(ENUM, "enum", 0)                                               \
-  /* END Callable */                                               \
   /* END AnyIdentifier */                                          \
+  /* END Callable */                                               \
+  K(ENUM, "enum", 0)                                               \
   K(CLASS, "class", 0)                                             \
   K(CONST, "const", 0)                                             \
   K(EXPORT, "export", 0)                                           \
@@ -190,31 +202,13 @@ namespace internal {
   /* Scanner-internal use only. */                                 \
   T(WHITESPACE, nullptr, 0)                                        \
   T(UNINITIALIZED, nullptr, 0)                                     \
-  T(REGEXP_LITERAL, nullptr, 0)                                    \
-                                                                   \
-  /* Contextual keyword tokens */                                  \
-  C(GET, "get", 0)                                                 \
-  C(SET, "set", 0)                                                 \
-  C(OF, "of", 0)                                                   \
-  C(TARGET, "target", 0)                                           \
-  C(META, "meta", 0)                                               \
-  C(AS, "as", 0)                                                   \
-  C(FROM, "from", 0)                                               \
-  C(NAME, "name", 0)                                               \
-  C(PROTO_UNDERSCORED, "__proto__", 0)                             \
-  C(CONSTRUCTOR, "constructor", 0)                                 \
-  C(PRIVATE_CONSTRUCTOR, "#constructor", 0)                        \
-  C(PROTOTYPE, "prototype", 0)                                     \
-  C(EVAL, "eval", 0)                                               \
-  C(ARGUMENTS, "arguments", 0)                                     \
-  C(UNDEFINED, "undefined", 0)                                     \
-  C(ANONYMOUS, "anonymous", 0)
+  T(REGEXP_LITERAL, nullptr, 0)
 
-class Token {
+class V8_EXPORT_PRIVATE Token {
  public:
   // All token values.
 #define T(name, string, precedence) name,
-  enum Value : uint8_t { TOKEN_LIST(T, T, T) NUM_TOKENS };
+  enum Value : uint8_t { TOKEN_LIST(T, T) NUM_TOKENS };
 #undef T
 
   // Returns a string corresponding to the C++ token name
@@ -224,84 +218,105 @@ class Token {
     return name_[token];
   }
 
-  static char TypeForTesting(Value token) { return token_type[token]; }
+  using IsKeywordBits = base::BitField8<bool, 0, 1>;
+  using IsPropertyNameBits = IsKeywordBits::Next<bool, 1>;
 
   // Predicates
-  static bool IsKeyword(Value token) { return token_type[token] == 'K'; }
-  static bool IsContextualKeyword(Value token) {
-    return IsInRange(token, GET, ANONYMOUS);
+  static bool IsKeyword(Value token) {
+    return IsKeywordBits::decode(token_flags[token]);
   }
 
-  static bool IsIdentifier(Value token, LanguageMode language_mode,
-                           bool is_generator, bool disallow_await) {
-    if (IsInRange(token, IDENTIFIER, ASYNC)) return true;
-    if (IsInRange(token, LET, ESCAPED_STRICT_RESERVED_WORD)) {
-      return is_sloppy(language_mode);
-    }
+  static bool IsPropertyName(Value token) {
+    return IsPropertyNameBits::decode(token_flags[token]);
+  }
+
+  V8_INLINE static bool IsValidIdentifier(Value token,
+                                          LanguageMode language_mode,
+                                          bool is_generator,
+                                          bool disallow_await) {
+    if (V8_LIKELY(base::IsInRange(token, IDENTIFIER, ASYNC))) return true;
     if (token == AWAIT) return !disallow_await;
     if (token == YIELD) return !is_generator && is_sloppy(language_mode);
-    return false;
+    return IsStrictReservedWord(token) && is_sloppy(language_mode);
   }
 
-  static bool IsCallable(Value token) { return IsInRange(token, SUPER, ENUM); }
+  static bool IsCallable(Value token) {
+    return base::IsInRange(token, SUPER, ESCAPED_STRICT_RESERVED_WORD);
+  }
 
   static bool IsAutoSemicolon(Value token) {
-    return IsInRange(token, SEMICOLON, EOS);
+    return base::IsInRange(token, SEMICOLON, EOS);
   }
 
   static bool IsAnyIdentifier(Value token) {
-    return IsInRange(token, IDENTIFIER, ENUM);
+    return base::IsInRange(token, IDENTIFIER, ESCAPED_STRICT_RESERVED_WORD);
   }
 
   static bool IsStrictReservedWord(Value token) {
-    return IsInRange(token, LET, ESCAPED_STRICT_RESERVED_WORD);
+    return base::IsInRange(token, YIELD, ESCAPED_STRICT_RESERVED_WORD);
   }
 
   static bool IsLiteral(Value token) {
-    return IsInRange(token, NULL_LITERAL, STRING);
+    return base::IsInRange(token, NULL_LITERAL, STRING);
+  }
+
+  static bool IsTemplate(Value token) {
+    return base::IsInRange(token, TEMPLATE_SPAN, TEMPLATE_TAIL);
+  }
+
+  static bool IsMember(Value token) {
+    return base::IsInRange(token, TEMPLATE_SPAN, LBRACK);
   }
 
   static bool IsProperty(Value token) {
-    return IsInRange(token, TEMPLATE_SPAN, LBRACK);
+    return base::IsInRange(token, PERIOD, LBRACK);
   }
 
   static bool IsPropertyOrCall(Value token) {
-    return IsInRange(token, TEMPLATE_SPAN, LPAREN);
+    return base::IsInRange(token, TEMPLATE_SPAN, LPAREN);
+  }
+
+  static bool IsArrowOrAssignmentOp(Value token) {
+    return base::IsInRange(token, ARROW, ASSIGN_SUB);
   }
 
   static bool IsAssignmentOp(Value token) {
-    return IsInRange(token, INIT, ASSIGN_EXP);
+    return base::IsInRange(token, INIT, ASSIGN_SUB);
   }
-  static bool IsGetOrSet(Value op) { return IsInRange(op, GET, SET); }
 
-  static bool IsBinaryOp(Value op) { return IsInRange(op, COMMA, EXP); }
+  static bool IsLogicalAssignmentOp(Value token) {
+    return base::IsInRange(token, ASSIGN_NULLISH, ASSIGN_AND);
+  }
 
-  static bool IsCompareOp(Value op) { return IsInRange(op, EQ, IN); }
+  static bool IsBinaryOp(Value op) { return base::IsInRange(op, COMMA, SUB); }
+
+  static bool IsCompareOp(Value op) { return base::IsInRange(op, EQ, IN); }
 
   static bool IsOrderedRelationalCompareOp(Value op) {
-    return IsInRange(op, LT, GTE);
+    return base::IsInRange(op, LT, GTE);
   }
 
-  static bool IsEqualityOp(Value op) { return IsInRange(op, EQ, EQ_STRICT); }
+  static bool IsEqualityOp(Value op) {
+    return base::IsInRange(op, EQ, EQ_STRICT);
+  }
 
   static Value BinaryOpForAssignment(Value op) {
-    DCHECK(IsInRange(op, ASSIGN_BIT_OR, ASSIGN_EXP));
-    Value result = static_cast<Value>(op - ASSIGN_BIT_OR + BIT_OR);
+    DCHECK(base::IsInRange(op, ASSIGN_NULLISH, ASSIGN_SUB));
+    Value result = static_cast<Value>(op - ASSIGN_NULLISH + NULLISH);
     DCHECK(IsBinaryOp(result));
     return result;
   }
 
   static bool IsBitOp(Value op) {
-    return IsInRange(op, BIT_OR, SHR) || op == BIT_NOT;
+    return base::IsInRange(op, BIT_OR, SHR) || op == BIT_NOT;
   }
 
-  static bool IsUnaryOp(Value op) {
-    return IsInRange(op, NOT, VOID) || IsInRange(op, ADD, SUB);
+  static bool IsUnaryOp(Value op) { return base::IsInRange(op, ADD, VOID); }
+  static bool IsCountOp(Value op) { return base::IsInRange(op, INC, DEC); }
+  static bool IsUnaryOrCountOp(Value op) {
+    return base::IsInRange(op, ADD, DEC);
   }
-
-  static bool IsCountOp(Value op) { return IsInRange(op, INC, DEC); }
-
-  static bool IsShiftOp(Value op) { return IsInRange(op, SHL, SHR); }
+  static bool IsShiftOp(Value op) { return base::IsInRange(op, SHL, SHR); }
 
   // Returns a string corresponding to the JS token string
   // (.e., "<" for the token LT) or nullptr if the token doesn't
@@ -318,17 +333,17 @@ class Token {
 
   // Returns the precedence > 0 for binary and compare
   // operators; returns 0 otherwise.
-  static int Precedence(Value token) {
+  static int Precedence(Value token, bool accept_IN) {
     DCHECK_GT(NUM_TOKENS, token);  // token is unsigned
-    return precedence_[token];
+    return precedence_[accept_IN][token];
   }
 
  private:
   static const char* const name_[NUM_TOKENS];
   static const char* const string_[NUM_TOKENS];
   static const uint8_t string_length_[NUM_TOKENS];
-  static const int8_t precedence_[NUM_TOKENS];
-  static const char token_type[NUM_TOKENS];
+  static const int8_t precedence_[2][NUM_TOKENS];
+  static const uint8_t token_flags[NUM_TOKENS];
 };
 
 }  // namespace internal

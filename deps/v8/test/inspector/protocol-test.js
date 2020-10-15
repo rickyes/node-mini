@@ -105,9 +105,45 @@ InspectorTest.logObject = function(object, title) {
   InspectorTest.log(lines.join("\n"));
 }
 
+InspectorTest.decodeBase64 = function(base64) {
+  const LOOKUP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+  const paddingLength = base64.match(/=*$/)[0].length;
+  const bytesLength = base64.length * 0.75 - paddingLength;
+
+  let bytes = new Uint8Array(bytesLength);
+
+  for (let i = 0, p = 0; i < base64.length; i += 4, p += 3) {
+    let bits = 0;
+    for (let j = 0; j < 4; j++) {
+      bits <<= 6;
+      const c = base64[i + j];
+      if (c !== '=') bits |= LOOKUP.indexOf(c);
+    }
+    for (let j = p + 2; j >= p; j--) {
+      if (j < bytesLength) bytes[j] = bits;
+      bits >>= 8;
+    }
+  }
+
+  return bytes;
+}
+
+InspectorTest.trimErrorMessage = function(message) {
+  if (!message.error || !message.error.data)
+    return message;
+  message.error.data = message.error.data.replace(/at position \d+/,
+                                                  'at <some position>');
+  return message;
+}
+
 InspectorTest.ContextGroup = class {
   constructor() {
     this.id = utils.createContextGroup();
+  }
+
+  createContext(name) {
+    utils.createContext(this.id, name || '');
   }
 
   schedulePauseOnNextStatement(reason, details) {
@@ -138,6 +174,10 @@ InspectorTest.ContextGroup = class {
 
   connect() {
     return new InspectorTest.Session(this);
+  }
+
+  reset() {
+    utils.resetContextGroup(this.id);
   }
 
   setupInjectedScriptEnvironment(session) {
@@ -176,8 +216,6 @@ InspectorTest.ContextGroup = class {
 
     if (session) {
       InspectorTest.log('WARNING: setupInjectedScriptEnvironment with debug flag for debugging only and should not be landed.');
-      InspectorTest.log('WARNING: run test with --expose-inspector-scripts flag to get more details.');
-      InspectorTest.log('WARNING: you can additionally comment rjsmin in xxd.py to get unminified injected-script-source.js.');
       session.setupScriptMap();
       session.Protocol.Debugger.enable();
       session.Protocol.Debugger.onPaused(message => {
@@ -237,21 +275,34 @@ InspectorTest.Session = class {
     }
   }
 
-  logSourceLocation(location, forceSourceRequest) {
+  async getScriptWithSource(scriptId, forceSourceRequest) {
+    var script = this._scriptMap.get(scriptId);
+    if (forceSourceRequest || !(script.scriptSource || script.bytecode)) {
+      var message = await this.Protocol.Debugger.getScriptSource({ scriptId });
+      script.scriptSource = message.result.scriptSource;
+      if (message.result.bytecode) {
+        script.bytecode = InspectorTest.decodeBase64(message.result.bytecode);
+      }
+    }
+    return script;
+  }
+
+  async logSourceLocation(location, forceSourceRequest) {
     var scriptId = location.scriptId;
     if (!this._scriptMap || !this._scriptMap.has(scriptId)) {
       InspectorTest.log("setupScriptMap should be called before Protocol.Debugger.enable.");
       InspectorTest.completeTest();
     }
-    var script = this._scriptMap.get(scriptId);
-    if (!script.scriptSource || forceSourceRequest) {
-      return this.Protocol.Debugger.getScriptSource({ scriptId })
-          .then(message => script.scriptSource = message.result.scriptSource)
-          .then(dumpSourceWithLocation);
-    }
-    return Promise.resolve().then(dumpSourceWithLocation);
+    var script = await this.getScriptWithSource(scriptId, forceSourceRequest);
 
-    function dumpSourceWithLocation() {
+    if (script.bytecode) {
+      if (location.lineNumber != 0) {
+        InspectorTest.log('Unexpected wasm line number: ' + location.lineNumber);
+      }
+      let wasm_opcode = script.bytecode[location.columnNumber].toString(16);
+      if (wasm_opcode.length % 2) wasm_opcode = '0' + wasm_opcode;
+      InspectorTest.log(`Script ${script.url} byte offset ${location.columnNumber}: Wasm opcode 0x${wasm_opcode}`);
+    } else {
       var lines = script.scriptSource.split('\n');
       var line = lines[location.lineNumber];
       line = line.slice(0, location.columnNumber) + '#' + (line.slice(location.columnNumber) || '');
@@ -270,11 +321,7 @@ InspectorTest.Session = class {
   async logBreakLocations(inputLocations) {
     let locations = inputLocations.slice();
     let scriptId = locations[0].scriptId;
-    let script = this._scriptMap.get(scriptId);
-    if (!script.scriptSource) {
-      let message = await this.Protocol.Debugger.getScriptSource({scriptId});
-      script.scriptSource = message.result.scriptSource;
-    }
+    let script = await this.getScriptWithSource(scriptId);
     let lines = script.scriptSource.split('\n');
     locations = locations.sort((loc1, loc2) => {
       if (loc2.lineNumber !== loc1.lineNumber) return loc2.lineNumber - loc1.lineNumber;
@@ -356,6 +403,12 @@ InspectorTest.Session = class {
     var messageObject = JSON.parse(messageString);
     if (InspectorTest._dumpInspectorProtocolMessages)
       utils.print("backend: " + JSON.stringify(messageObject));
+    const kMethodNotFound = -32601;
+    if (messageObject.error && messageObject.error.code === kMethodNotFound) {
+      InspectorTest.log(`Error: Called non-existent method. ${
+          messageObject.error.message} code: ${messageObject.error.code}`);
+      InspectorTest.completeTest();
+    }
     try {
       var messageId = messageObject["id"];
       if (typeof messageId === "number") {

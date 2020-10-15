@@ -11,6 +11,7 @@
     return 1;
   }
 
+  %PrepareFunctionForOptimization(foo);
   assertEquals(0, foo(2));
   assertEquals(1, foo(-1));
   %OptimizeFunctionOnNextCall(foo);
@@ -20,4 +21,19 @@
   // Now `foo` should stay optimized even if `x * -2` would produce `-0`.
   assertEquals(0, foo(0));
   assertOptimized(foo);
+})();
+
+// Test that NumberMax properly handles 64-bit comparisons.
+(function() {
+  function foo(x) {
+    x = x|0;
+    return Math.max(x - 1, x + 1);
+  }
+
+  %PrepareFunctionForOptimization(foo);
+  assertEquals(-Math.pow(2, 31) + 1, foo(-Math.pow(2, 31)));
+  assertEquals(Math.pow(2, 31), foo(Math.pow(2, 31) - 1));
+  %OptimizeFunctionOnNextCall(foo);
+  assertEquals(-Math.pow(2, 31) + 1, foo(-Math.pow(2, 31)));
+  assertEquals(Math.pow(2, 31), foo(Math.pow(2, 31) - 1));
 })();

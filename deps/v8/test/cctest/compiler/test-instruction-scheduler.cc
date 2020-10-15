@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/compiler/instruction-scheduler.h"
-#include "src/compiler/instruction-selector-impl.h"
-#include "src/compiler/instruction.h"
-
+#include "src/compiler/backend/instruction-scheduler.h"
+#include "src/compiler/backend/instruction-selector-impl.h"
+#include "src/compiler/backend/instruction.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
@@ -14,13 +13,11 @@ namespace compiler {
 
 // Create InstructionBlocks with a single block.
 InstructionBlocks* CreateSingleBlock(Zone* zone) {
+  InstructionBlock* block = zone->New<InstructionBlock>(
+      zone, RpoNumber::FromInt(0), RpoNumber::Invalid(), RpoNumber::Invalid(),
+      RpoNumber::Invalid(), false, false);
   InstructionBlocks* blocks = zone->NewArray<InstructionBlocks>(1);
-  new (blocks) InstructionBlocks(1, nullptr, zone);
-  InstructionBlock* block = new (zone)
-      InstructionBlock(zone, RpoNumber::FromInt(0), RpoNumber::Invalid(),
-                       RpoNumber::Invalid(), false, false);
-  block->set_ao_number(RpoNumber::FromInt(0));
-  (*blocks)[0] = block;
+  new (blocks) InstructionBlocks(1, block, zone);
   return blocks;
 }
 
@@ -28,7 +25,7 @@ InstructionBlocks* CreateSingleBlock(Zone* zone) {
 class InstructionSchedulerTester {
  public:
   InstructionSchedulerTester()
-      : scope_(),
+      : scope_(kCompressGraphZone),
         blocks_(CreateSingleBlock(scope_.main_zone())),
         sequence_(scope_.main_isolate(), scope_.main_zone(), blocks_),
         scheduler_(scope_.main_zone(), &sequence_) {}
@@ -78,7 +75,7 @@ TEST(DeoptInMiddleOfBasicBlock) {
   // Dummy node for FlagsContinuation::ForDeoptimize (which won't accept
   // nullptr).
   Node* node = Node::New(zone, 0, nullptr, 0, nullptr, false);
-  VectorSlotPair feedback;
+  FeedbackSource feedback;
   FlagsContinuation cont = FlagsContinuation::ForDeoptimize(
       kEqual, DeoptimizeKind::kEager, DeoptimizeReason::kUnknown, feedback,
       node);

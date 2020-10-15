@@ -5,7 +5,7 @@
 #ifndef V8_BUILTINS_BUILTINS_CALL_GEN_H_
 #define V8_BUILTINS_BUILTINS_CALL_GEN_H_
 
-#include "src/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler.h"
 
 namespace v8 {
 namespace internal {
@@ -16,18 +16,34 @@ class CallOrConstructBuiltinsAssembler : public CodeStubAssembler {
       : CodeStubAssembler(state) {}
 
   void CallOrConstructWithArrayLike(TNode<Object> target,
-                                    SloppyTNode<Object> new_target,
+                                    base::Optional<TNode<Object>> new_target,
                                     TNode<Object> arguments_list,
                                     TNode<Context> context);
   void CallOrConstructDoubleVarargs(TNode<Object> target,
-                                    SloppyTNode<Object> new_target,
+                                    base::Optional<TNode<Object>> new_target,
                                     TNode<FixedDoubleArray> elements,
                                     TNode<Int32T> length,
                                     TNode<Int32T> args_count,
                                     TNode<Context> context, TNode<Int32T> kind);
-  void CallOrConstructWithSpread(TNode<Object> target, TNode<Object> new_target,
+  void CallOrConstructWithSpread(TNode<Object> target,
+                                 base::Optional<TNode<Object>> new_target,
                                  TNode<Object> spread, TNode<Int32T> args_count,
                                  TNode<Context> context);
+
+  enum class CallFunctionTemplateMode : uint8_t {
+    kCheckAccess,
+    kCheckCompatibleReceiver,
+    kCheckAccessAndCompatibleReceiver,
+  };
+
+  void CallFunctionTemplate(CallFunctionTemplateMode mode,
+                            TNode<FunctionTemplateInfo> function_template_info,
+                            TNode<IntPtrT> argc, TNode<Context> context);
+
+ private:
+  TNode<JSReceiver> GetCompatibleReceiver(TNode<JSReceiver> receiver,
+                                          TNode<HeapObject> signature,
+                                          TNode<Context> context);
 };
 
 }  // namespace internal

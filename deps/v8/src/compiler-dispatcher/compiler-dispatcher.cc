@@ -6,14 +6,15 @@
 
 #include "src/ast/ast.h"
 #include "src/base/platform/time.h"
-#include "src/base/template-utils.h"
-#include "src/cancelable-task.h"
-#include "src/compiler.h"
-#include "src/flags.h"
-#include "src/global-handles.h"
-#include "src/objects-inl.h"
+#include "src/codegen/compiler.h"
+#include "src/flags/flags.h"
+#include "src/handles/global-handles.h"
+#include "src/objects/objects-inl.h"
 #include "src/parsing/parse-info.h"
 #include "src/parsing/parser.h"
+#include "src/tasks/cancelable-task.h"
+#include "src/tasks/task-utils.h"
+#include "src/zone/zone-list-inl.h"  // crbug.com/v8/8816
 
 namespace v8 {
 namespace internal {
@@ -26,7 +27,6 @@ CompilerDispatcher::Job::~Job() = default;
 CompilerDispatcher::CompilerDispatcher(Isolate* isolate, Platform* platform,
                                        size_t max_stack_size)
     : isolate_(isolate),
-      allocator_(isolate->allocator()),
       worker_thread_runtime_call_stats_(
           isolate->counters()->worker_thread_runtime_call_stats()),
       background_compile_timer_(
@@ -64,8 +64,8 @@ base::Optional<CompilerDispatcher::JobId> CompilerDispatcher::Enqueue(
 
   if (!IsEnabled()) return base::nullopt;
 
-  std::unique_ptr<Job> job = base::make_unique<Job>(new BackgroundCompileTask(
-      allocator_, outer_parse_info, function_name, function_literal,
+  std::unique_ptr<Job> job = std::make_unique<Job>(new BackgroundCompileTask(
+      outer_parse_info, function_name, function_literal,
       worker_thread_runtime_call_stats_, background_compile_timer_,
       static_cast<int>(max_stack_size_)));
   JobMap::const_iterator it = InsertJob(std::move(job));
@@ -97,24 +97,24 @@ bool CompilerDispatcher::IsEnqueued(JobId job_id) const {
 }
 
 void CompilerDispatcher::RegisterSharedFunctionInfo(
-    JobId job_id, SharedFunctionInfo* function) {
+    JobId job_id, SharedFunctionInfo function) {
   DCHECK_NE(jobs_.find(job_id), jobs_.end());
 
   if (trace_compiler_dispatcher_) {
     PrintF("CompilerDispatcher: registering ");
-    function->ShortPrint();
+    function.ShortPrint();
     PrintF(" with job id %zu\n", job_id);
   }
 
   // Make a global handle to the function.
-  Handle<SharedFunctionInfo> function_handle =
-      isolate_->global_handles()->Create(function);
+  Handle<SharedFunctionInfo> function_handle = Handle<SharedFunctionInfo>::cast(
+      isolate_->global_handles()->Create(function));
 
   // Register mapping.
   auto job_it = jobs_.find(job_id);
   DCHECK_NE(job_it, jobs_.end());
   Job* job = job_it->second.get();
-  shared_to_unoptimized_job_id_.Set(function_handle, job_id);
+  shared_to_unoptimized_job_id_.Insert(function_handle, job_id);
 
   {
     base::MutexGuard lock(&mutex_);
@@ -231,7 +231,7 @@ void CompilerDispatcher::ScheduleIdleTaskFromAnyThread(
   if (idle_task_scheduled_) return;
 
   idle_task_scheduled_ = true;
-  taskrunner_->PostIdleTask(MakeCancelableIdleLambdaTask(
+  taskrunner_->PostIdleTask(MakeCancelableIdleTask(
       task_manager_.get(),
       [this](double deadline_in_seconds) { DoIdleWork(deadline_in_seconds); }));
 }
@@ -247,8 +247,8 @@ void CompilerDispatcher::ScheduleMoreWorkerTasksIfNeeded() {
     }
     ++num_worker_tasks_;
   }
-  platform_->CallOnWorkerThread(MakeCancelableLambdaTask(
-      task_manager_.get(), [this] { DoBackgroundWork(); }));
+  platform_->CallOnWorkerThread(
+      MakeCancelableTask(task_manager_.get(), [this] { DoBackgroundWork(); }));
 }
 
 void CompilerDispatcher::DoBackgroundWork() {
@@ -372,7 +372,7 @@ CompilerDispatcher::JobMap::const_iterator CompilerDispatcher::RemoveJob(
   // Delete SFI associated with job if its been registered.
   Handle<SharedFunctionInfo> function;
   if (job->function.ToHandle(&function)) {
-    GlobalHandles::Destroy(Handle<Object>::cast(function).location());
+    GlobalHandles::Destroy(function.location());
   }
 
   // Delete job.

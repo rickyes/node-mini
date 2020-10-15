@@ -2,7 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# for py2/py3 compatibility
+from __future__ import print_function
 
+from contextlib import contextmanager
 import os
 import re
 import signal
@@ -37,9 +40,37 @@ class AbortException(Exception):
   pass
 
 
+@contextmanager
+def handle_sigterm(process, abort_fun, enabled):
+  """Call`abort_fun` on sigterm and restore previous handler to prevent
+  erroneous termination of an already terminated process.
+
+  Args:
+    process: The process to terminate.
+    abort_fun: Function taking two parameters: the process to terminate and
+        an array with a boolean for storing if an abort occured.
+    enabled: If False, this wrapper will be a no-op.
+  """
+  # Variable to communicate with the signal handler.
+  abort_occured = [False]
+  def handler(signum, frame):
+    abort_fun(process, abort_occured)
+
+  if enabled:
+    previous = signal.signal(signal.SIGTERM, handler)
+  try:
+    yield
+  finally:
+    if enabled:
+      signal.signal(signal.SIGTERM, previous)
+
+  if abort_occured[0]:
+    raise AbortException()
+
+
 class BaseCommand(object):
   def __init__(self, shell, args=None, cmd_prefix=None, timeout=60, env=None,
-               verbose=False, resources_func=None):
+               verbose=False, resources_func=None, handle_sigterm=False):
     """Initialize the command.
 
     Args:
@@ -50,6 +81,9 @@ class BaseCommand(object):
       env: Environment dict for execution.
       verbose: Print additional output.
       resources_func: Callable, returning all test files needed by this command.
+      handle_sigterm: Flag indicating if SIGTERM will be used to terminate the
+          underlying process. Should not be used from the main thread, e.g. when
+          using a command to list tests.
     """
     assert(timeout > 0)
 
@@ -59,33 +93,26 @@ class BaseCommand(object):
     self.timeout = timeout
     self.env = env or {}
     self.verbose = verbose
+    self.handle_sigterm = handle_sigterm
 
   def execute(self):
     if self.verbose:
-      print '# %s' % self
+      print('# %s' % self)
 
     process = self._start_process()
 
-    # Variable to communicate with the signal handler.
-    abort_occured = [False]
-    def handler(signum, frame):
-      self._abort(process, abort_occured)
-    signal.signal(signal.SIGTERM, handler)
+    with handle_sigterm(process, self._abort, self.handle_sigterm):
+      # Variable to communicate with the timer.
+      timeout_occured = [False]
+      timer = threading.Timer(
+          self.timeout, self._abort, [process, timeout_occured])
+      timer.start()
 
-    # Variable to communicate with the timer.
-    timeout_occured = [False]
-    timer = threading.Timer(
-        self.timeout, self._abort, [process, timeout_occured])
-    timer.start()
+      start_time = time.time()
+      stdout, stderr = process.communicate()
+      duration = time.time() - start_time
 
-    start_time = time.time()
-    stdout, stderr = process.communicate()
-    duration = time.time() - start_time
-
-    timer.cancel()
-
-    if abort_occured[0]:
-      raise AbortException()
+      timer.cancel()
 
     return output.Output(
       process.returncode,
@@ -126,10 +153,16 @@ class BaseCommand(object):
 
   def _abort(self, process, abort_called):
     abort_called[0] = True
+    started_as = self.to_string(relative=True)
+    process_text = 'process %d started as:\n  %s\n' % (process.pid, started_as)
     try:
+      print('Attempting to kill ' + process_text)
+      sys.stdout.flush()
       self._kill_process(process)
-    except OSError:
-      pass
+    except OSError as e:
+      print(e)
+      print('Unruly ' + process_text)
+      sys.stdout.flush()
 
   def __str__(self):
     return self.to_string()
@@ -153,8 +186,47 @@ class BaseCommand(object):
 
 
 class PosixCommand(BaseCommand):
+  # TODO(machenbach): Use base process start without shell once
+  # https://crbug.com/v8/8889 is resolved.
+  def _start_process(self):
+    def wrapped(arg):
+      if set('() \'"') & set(arg):
+        return "'%s'" % arg.replace("'", "'\"'\"'")
+      return arg
+    try:
+      return subprocess.Popen(
+        args=' '.join(map(wrapped, self._get_popen_args())),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=self._get_env(),
+        shell=True,
+        # Make the new shell create its own process group. This allows to kill
+        # all spawned processes reliably (https://crbug.com/v8/8292).
+        preexec_fn=os.setsid,
+      )
+    except Exception as e:
+      sys.stderr.write('Error executing: %s\n' % self)
+      raise e
+
   def _kill_process(self, process):
-    process.kill()
+    # Kill the whole process group (PID == GPID after setsid).
+    os.killpg(process.pid, signal.SIGKILL)
+
+
+def taskkill_windows(process, verbose=False, force=True):
+  force_flag = ' /F' if force else ''
+  tk = subprocess.Popen(
+      'taskkill /T%s /PID %d' % (force_flag, process.pid),
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+  )
+  stdout, stderr = tk.communicate()
+  if verbose:
+    print('Taskkill results for %d' % process.pid)
+    print(stdout)
+    print(stderr)
+    print('Return code: %d' % tk.returncode)
+    sys.stdout.flush()
 
 
 class WindowsCommand(BaseCommand):
@@ -186,26 +258,15 @@ class WindowsCommand(BaseCommand):
     return subprocess.list2cmdline(self._to_args_list())
 
   def _kill_process(self, process):
-    if self.verbose:
-      print 'Attempting to kill process %d' % process.pid
-      sys.stdout.flush()
-    tk = subprocess.Popen(
-        'taskkill /T /F /PID %d' % process.pid,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    stdout, stderr = tk.communicate()
-    if self.verbose:
-      print 'Taskkill results for %d' % process.pid
-      print stdout
-      print stderr
-      print 'Return code: %d' % tk.returncode
-      sys.stdout.flush()
+    taskkill_windows(process, self.verbose)
 
 
 class AndroidCommand(BaseCommand):
+  # This must be initialized before creating any instances of this class.
+  driver = None
+
   def __init__(self, shell, args=None, cmd_prefix=None, timeout=60, env=None,
-               verbose=False, resources_func=None):
+               verbose=False, resources_func=None, handle_sigterm=False):
     """Initialize the command and all files that need to be pushed to the
     Android device.
     """
@@ -226,7 +287,7 @@ class AndroidCommand(BaseCommand):
 
     super(AndroidCommand, self).__init__(
         shell, args=rel_args, cmd_prefix=cmd_prefix, timeout=timeout, env=env,
-        verbose=verbose)
+        verbose=verbose, handle_sigterm=handle_sigterm)
 
   def execute(self, **additional_popen_kwargs):
     """Execute the command on the device.
@@ -234,21 +295,21 @@ class AndroidCommand(BaseCommand):
     This pushes all required files to the device and then runs the command.
     """
     if self.verbose:
-      print '# %s' % self
+      print('# %s' % self)
 
-    android_driver().push_executable(self.shell_dir, 'bin', self.shell_name)
+    self.driver.push_executable(self.shell_dir, 'bin', self.shell_name)
 
     for abs_file in self.files_to_push:
       abs_dir = os.path.dirname(abs_file)
       file_name = os.path.basename(abs_file)
       rel_dir = os.path.relpath(abs_dir, BASE_DIR)
-      android_driver().push_file(abs_dir, file_name, rel_dir)
+      self.driver.push_file(abs_dir, file_name, rel_dir)
 
     start_time = time.time()
     return_code = 0
     timed_out = False
     try:
-      stdout = android_driver().run(
+      stdout = self.driver.run(
           'bin', self.shell_name, self.args, '.', self.timeout, self.env)
     except CommandFailedException as e:
       return_code = e.status
@@ -271,10 +332,11 @@ class AndroidCommand(BaseCommand):
 
 
 Command = None
-def setup(target_os):
+def setup(target_os, device):
   """Set the Command class to the OS-specific version."""
   global Command
   if target_os == 'android':
+    AndroidCommand.driver = android_driver(device)
     Command = AndroidCommand
   elif target_os == 'windows':
     Command = WindowsCommand
@@ -284,4 +346,4 @@ def setup(target_os):
 def tear_down():
   """Clean up after using commands."""
   if Command == AndroidCommand:
-    android_driver().tear_down()
+    AndroidCommand.driver.tear_down()

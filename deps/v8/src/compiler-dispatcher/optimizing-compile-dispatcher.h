@@ -5,20 +5,21 @@
 #ifndef V8_COMPILER_DISPATCHER_OPTIMIZING_COMPILE_DISPATCHER_H_
 #define V8_COMPILER_DISPATCHER_OPTIMIZING_COMPILE_DISPATCHER_H_
 
+#include <atomic>
 #include <queue>
 
-#include "src/allocation.h"
-#include "src/base/atomicops.h"
 #include "src/base/platform/condition-variable.h"
 #include "src/base/platform/mutex.h"
 #include "src/base/platform/platform.h"
-#include "src/flags.h"
-#include "src/globals.h"
+#include "src/common/globals.h"
+#include "src/flags/flags.h"
+#include "src/utils/allocation.h"
 
 namespace v8 {
 namespace internal {
 
 class OptimizedCompilationJob;
+class RuntimeCallStats;
 class SharedFunctionInfo;
 
 class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
@@ -28,10 +29,10 @@ class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
         input_queue_capacity_(FLAG_concurrent_recompilation_queue_length),
         input_queue_length_(0),
         input_queue_shift_(0),
+        mode_(COMPILE),
         blocked_jobs_(0),
         ref_count_(0),
         recompilation_delay_(FLAG_concurrent_recompilation_delay) {
-    base::Relaxed_Store(&mode_, static_cast<base::AtomicWord>(COMPILE));
     input_queue_ = NewArray<OptimizedCompilationJob*>(input_queue_capacity_);
   }
 
@@ -57,7 +58,7 @@ class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
   enum ModeFlag { COMPILE, FLUSH };
 
   void FlushOutputQueue(bool restore_function_code);
-  void CompileNext(OptimizedCompilationJob* job);
+  void CompileNext(OptimizedCompilationJob* job, RuntimeCallStats* stats);
   OptimizedCompilationJob* NextInput(bool check_if_flushing = false);
 
   inline int InputQueueIndex(int i) {
@@ -82,7 +83,7 @@ class V8_EXPORT_PRIVATE OptimizingCompileDispatcher {
   // different threads.
   base::Mutex output_queue_mutex_;
 
-  volatile base::AtomicWord mode_;
+  std::atomic<ModeFlag> mode_;
 
   int blocked_jobs_;
 

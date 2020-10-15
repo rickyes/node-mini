@@ -4,7 +4,6 @@
 
 // Flags: --expose-wasm
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 (function Test1() {
@@ -16,20 +15,20 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
     builder.addImport("q", "add", sig_index);
     var f = builder.addFunction("add", sig_index)
       .addBody([
-        kExprGetLocal, 0, kExprGetLocal, 1, kExprCallFunction, 0
+        kExprLocalGet, 0, kExprLocalGet, 1, kExprCallFunction, 0
       ]);
     print("internal add index = " + f.index);
     builder.addFunction("sub", sig_index)
       .addBody([
-        kExprGetLocal, 0,             // --
-        kExprGetLocal, 1,             // --
+        kExprLocalGet, 0,             // --
+        kExprLocalGet, 1,             // --
         kExprI32Sub,                  // --
       ]);
     builder.addFunction("main", kSig_i_iii)
       .addBody([
-        kExprGetLocal, 1,
-        kExprGetLocal, 2,
-        kExprGetLocal, 0,
+        kExprLocalGet, 1,
+        kExprLocalGet, 2,
+        kExprLocalGet, 0,
         kExprCallIndirect, sig_index, kTableZero
       ])
       .exportFunc()
@@ -56,7 +55,7 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
   print(" --z1--");
   assertTraps(kTrapFuncSigMismatch, () => module.exports.main(2, 12, 33));
   print(" --w1--");
-  assertTraps(kTrapFuncInvalid, () => module.exports.main(3, 12, 33));
+  assertTraps(kTrapTableOutOfBounds, () => module.exports.main(3, 12, 33));
 })();
 
 (function Test2() {
@@ -69,20 +68,20 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
     var mul = builder.addImport("q", "mul", sig_i_ii);
     var add = builder.addFunction("add", sig_i_ii)
         .addBody([
-          kExprGetLocal, 0,  // --
-          kExprGetLocal, 1,  // --
+          kExprLocalGet, 0,  // --
+          kExprLocalGet, 1,  // --
           kExprI32Add        // --
         ]);
     var popcnt = builder.addFunction("popcnt", sig_i_i)
         .addBody([
-          kExprGetLocal, 0,  // --
+          kExprLocalGet, 0,  // --
           kExprI32Popcnt     // --
         ]);
     var main = builder.addFunction("main", kSig_i_iii)
         .addBody([
-          kExprGetLocal, 1,
-          kExprGetLocal, 2,
-          kExprGetLocal, 0,
+          kExprLocalGet, 1,
+          kExprLocalGet, 2,
+          kExprLocalGet, 0,
           kExprCallIndirect, sig_i_ii, kTableZero
         ])
         .exportFunc();
@@ -100,27 +99,27 @@ load("test/mjsunit/wasm/wasm-module-builder.js");
   print(" --q2--");
   assertTraps(kTrapFuncSigMismatch, () => module.exports.main(3, 12, 33));
   print(" --t2--");
-  assertTraps(kTrapFuncInvalid, () => module.exports.main(4, 12, 33));
+  assertTraps(kTrapTableOutOfBounds, () => module.exports.main(4, 12, 33));
 })();
 
 
 function AddFunctions(builder) {
   var mul = builder.addFunction("mul", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,  // --
-      kExprGetLocal, 1,  // --
+      kExprLocalGet, 0,  // --
+      kExprLocalGet, 1,  // --
       kExprI32Mul        // --
     ]);
   var add = builder.addFunction("add", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,  // --
-      kExprGetLocal, 1,  // --
+      kExprLocalGet, 0,  // --
+      kExprLocalGet, 1,  // --
       kExprI32Add        // --
     ]);
   var sub = builder.addFunction("sub", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,  // --
-      kExprGetLocal, 1,  // --
+      kExprLocalGet, 0,  // --
+      kExprLocalGet, 1,  // --
       kExprI32Sub        // --
     ]);
   return {mul: mul, add: add, sub: sub};
@@ -136,8 +135,8 @@ function AddFunctions(builder) {
     builder.addFunction("main", kSig_i_ii)
       .addBody([
         kExprI32Const, 33,  // --
-        kExprGetLocal, 0,   // --
-        kExprGetLocal, 1,   // --
+        kExprLocalGet, 0,   // --
+        kExprLocalGet, 1,   // --
         kExprCallIndirect, 0, kTableZero])  // --
       .exportAs("main");
 
@@ -152,7 +151,7 @@ function AddFunctions(builder) {
   assertEquals(35, module.exports.main(2, 1));
   assertEquals(32, module.exports.main(1, 2));
   assertEquals(31, module.exports.main(2, 2));
-  assertTraps(kTrapFuncInvalid, () => module.exports.main(12, 3));
+  assertTraps(kTrapTableOutOfBounds, () => module.exports.main(12, 3));
 })();
 
 (function ConstBaseTest() {
@@ -164,13 +163,13 @@ function AddFunctions(builder) {
     builder.addFunction("main", kSig_i_ii)
       .addBody([
         kExprI32Const, 33,  // --
-        kExprGetLocal, 0,   // --
-        kExprGetLocal, 1,   // --
+        kExprLocalGet, 0,   // --
+        kExprLocalGet, 1,   // --
         kExprCallIndirect, 0, kTableZero])  // --
       .exportAs("main");
 
     builder.setTableBounds(length, length);
-    builder.addElementSegment(base, false, [f.add.index, f.sub.index, f.mul.index]);
+    builder.addElementSegment(0, base, false, [f.add.index, f.sub.index, f.mul.index]);
 
     return builder.instantiate();
   }
@@ -188,7 +187,7 @@ function AddFunctions(builder) {
     assertEquals(31, main(2, i + 1));
     assertEquals(33, main(1, i + 2));
     assertEquals(66, main(2, i + 2));
-    assertTraps(kTrapFuncInvalid, () => main(12, 10));
+    assertTraps(kTrapTableOutOfBounds, () => main(12, 10));
   }
 })();
 
@@ -201,14 +200,14 @@ function AddFunctions(builder) {
   builder.addFunction("main", kSig_i_ii)
     .addBody([
       kExprI32Const, 33,  // --
-      kExprGetLocal, 0,   // --
-      kExprGetLocal, 1,   // --
+      kExprLocalGet, 0,   // --
+      kExprLocalGet, 1,   // --
       kExprCallIndirect, 0, kTableZero])  // --
     .exportAs("main");
 
   builder.setTableBounds(10, 10);
   var g = builder.addImportedGlobal("fff", "base", kWasmI32);
-  builder.addElementSegment(g, true, [f.mul.index, f.add.index, f.sub.index]);
+  builder.addElementSegment(0, g, true, [f.mul.index, f.add.index, f.sub.index]);
 
   var module = new WebAssembly.Module(builder.toBuffer());
 
@@ -225,6 +224,6 @@ function AddFunctions(builder) {
     assertEquals(35, main(2, i + 1));
     assertEquals(32, main(1, i + 2));
     assertEquals(31, main(2, i + 2));
-    assertTraps(kTrapFuncInvalid, () => main(12, 10));
+    assertTraps(kTrapTableOutOfBounds, () => main(12, 10));
   }
 })();

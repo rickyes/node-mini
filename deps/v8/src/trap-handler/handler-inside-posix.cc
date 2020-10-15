@@ -26,6 +26,13 @@
 #include "src/trap-handler/handler-inside-posix.h"
 
 #include <signal.h>
+
+#if defined(V8_OS_LINUX) || defined(V8_OS_FREEBSD)
+#include <ucontext.h>
+#elif V8_OS_MACOSX
+#include <sys/ucontext.h>
+#endif
+
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -37,6 +44,9 @@ namespace internal {
 namespace trap_handler {
 
 bool IsKernelGeneratedSignal(siginfo_t* info) {
+  // On macOS, only `info->si_code > 0` is relevant, because macOS leaves
+  // si_code at its default of 0 for signals that don’t originate in hardware.
+  // The other conditions are only relevant for Linux.
   return info->si_code > 0 && info->si_code != SI_USER &&
          info->si_code != SI_QUEUE && info->si_code != SI_TIMER &&
          info->si_code != SI_ASYNCIO && info->si_code != SI_MESGQ;
@@ -50,20 +60,32 @@ class SigUnmaskStack {
     pthread_sigmask(SIG_UNBLOCK, &sigs, &old_mask_);
   }
 
-  ~SigUnmaskStack() { pthread_sigmask(SIG_SETMASK, &old_mask_, nullptr); }
-
- private:
-  sigset_t old_mask_;
-
   // We'd normally use DISALLOW_COPY_AND_ASSIGN, but we're avoiding a dependency
   // on base/macros.h
   SigUnmaskStack(const SigUnmaskStack&) = delete;
   void operator=(const SigUnmaskStack&) = delete;
+
+  ~SigUnmaskStack() { pthread_sigmask(SIG_SETMASK, &old_mask_, nullptr); }
+
+ private:
+  sigset_t old_mask_;
 };
 
 bool TryHandleSignal(int signum, siginfo_t* info, void* context) {
+  // Ensure the faulting thread was actually running Wasm code. This should be
+  // the first check in the trap handler to guarantee that the IsThreadInWasm
+  // flag is only set in wasm code. Otherwise a later signal handler is executed
+  // with the flag set.
+  if (!IsThreadInWasm()) {
+    return false;
+  }
+
+  // Clear g_thread_in_wasm_code, primarily to protect against nested faults.
+  g_thread_in_wasm_code = false;
+
   // Bail out early in case we got called for the wrong kind of signal.
-  if (signum != SIGSEGV) {
+
+  if (signum != kOobSignal) {
     return false;
   }
 
@@ -71,14 +93,6 @@ bool TryHandleSignal(int signum, siginfo_t* info, void* context) {
   if (!IsKernelGeneratedSignal(info)) {
     return false;
   }
-
-  // Ensure the faulting thread was actually running Wasm code.
-  if (!IsThreadInWasm()) {
-    return false;
-  }
-
-  // Clear g_thread_in_wasm_code, primarily to protect against nested faults.
-  g_thread_in_wasm_code = false;
 
   // Begin signal mask scope. We need to be sure to restore the signal mask
   // before we restore the g_thread_in_wasm_code flag.
@@ -94,11 +108,20 @@ bool TryHandleSignal(int signum, siginfo_t* info, void* context) {
     SigUnmaskStack unmask(sigs);
 
     ucontext_t* uc = reinterpret_cast<ucontext_t*>(context);
-    uintptr_t fault_addr = uc->uc_mcontext.gregs[REG_RIP];
+#if V8_OS_LINUX
+    auto* context_rip = &uc->uc_mcontext.gregs[REG_RIP];
+#elif V8_OS_MACOSX
+    auto* context_rip = &uc->uc_mcontext->__ss.__rip;
+#elif V8_OS_FREEBSD
+    auto* context_rip = &uc->uc_mcontext.mc_rip;
+#else
+#error Unsupported platform
+#endif
+    uintptr_t fault_addr = *context_rip;
     uintptr_t landing_pad = 0;
     if (TryFindLandingPad(fault_addr, &landing_pad)) {
       // Tell the caller to return to the landing pad.
-      uc->uc_mcontext.gregs[REG_RIP] = landing_pad;
+      *context_rip = landing_pad;
       // We will return to wasm code, so restore the g_thread_in_wasm_code flag.
       g_thread_in_wasm_code = true;
       return true;

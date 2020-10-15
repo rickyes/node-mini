@@ -32,7 +32,7 @@ TEST(TemplateUtilsTest, MakeArraySimple) {
 
 namespace {
 constexpr int doubleIntValue(int i) { return i * 2; }
-};  // namespace
+}  // namespace
 
 TEST(TemplateUtilsTest, MakeArrayConstexpr) {
   constexpr auto computed_array = base::make_array<3>(doubleIntValue);
@@ -136,7 +136,7 @@ TEST(TemplateUtilsTest, FoldMoveOnlyType) {
     str->push_back(c);
     return str;
   };
-  std::unique_ptr<std::string> str = base::make_unique<std::string>("foo");
+  std::unique_ptr<std::string> str = std::make_unique<std::string>("foo");
   std::unique_ptr<std::string> folded =
       base::fold(fn, std::move(str), 'b', 'a', 'r');
   CHECK_NULL(str);

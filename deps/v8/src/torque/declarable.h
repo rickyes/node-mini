@@ -7,6 +7,7 @@
 
 #include <cassert>
 #include <string>
+#include <unordered_map>
 
 #include "src/base/functional.h"
 #include "src/base/logging.h"
@@ -18,43 +19,108 @@ namespace v8 {
 namespace internal {
 namespace torque {
 
-class Block;
-class Generic;
 class Scope;
-class ScopeChain;
+class Namespace;
+class TypeArgumentInference;
+
+DECLARE_CONTEXTUAL_VARIABLE(CurrentScope, Scope*);
+
+struct QualifiedName {
+  std::vector<std::string> namespace_qualification;
+  std::string name;
+
+  QualifiedName(std::vector<std::string> namespace_qualification,
+                std::string name)
+      : namespace_qualification(std::move(namespace_qualification)),
+        name(std::move(name)) {}
+  explicit QualifiedName(std::string name)
+      : QualifiedName({}, std::move(name)) {}
+
+  bool HasNamespaceQualification() const {
+    return !namespace_qualification.empty();
+  }
+
+  QualifiedName DropFirstNamespaceQualification() const {
+    return QualifiedName{
+        std::vector<std::string>(namespace_qualification.begin() + 1,
+                                 namespace_qualification.end()),
+        name};
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const QualifiedName& name);
+};
 
 class Declarable {
  public:
   virtual ~Declarable() = default;
   enum Kind {
-    kMacro,
-    kMacroList,
+    kNamespace,
+    kTorqueMacro,
+    kExternMacro,
+    kMethod,
     kBuiltin,
     kRuntimeFunction,
-    kGeneric,
-    kGenericList,
+    kIntrinsic,
+    kGenericCallable,
+    kGenericType,
     kTypeAlias,
     kExternConstant,
-    kModuleConstant
+    kNamespaceConstant
   };
   Kind kind() const { return kind_; }
-  bool IsMacro() const { return kind() == kMacro; }
+  bool IsNamespace() const { return kind() == kNamespace; }
+  bool IsMacro() const { return IsTorqueMacro() || IsExternMacro(); }
+  bool IsTorqueMacro() const { return kind() == kTorqueMacro || IsMethod(); }
+  bool IsMethod() const { return kind() == kMethod; }
+  bool IsExternMacro() const { return kind() == kExternMacro; }
+  bool IsIntrinsic() const { return kind() == kIntrinsic; }
   bool IsBuiltin() const { return kind() == kBuiltin; }
   bool IsRuntimeFunction() const { return kind() == kRuntimeFunction; }
-  bool IsGeneric() const { return kind() == kGeneric; }
+  bool IsGenericCallable() const { return kind() == kGenericCallable; }
+  bool IsGenericType() const { return kind() == kGenericType; }
   bool IsTypeAlias() const { return kind() == kTypeAlias; }
-  bool IsMacroList() const { return kind() == kMacroList; }
-  bool IsGenericList() const { return kind() == kGenericList; }
   bool IsExternConstant() const { return kind() == kExternConstant; }
-  bool IsModuleConstant() const { return kind() == kModuleConstant; }
-  bool IsValue() const { return IsExternConstant() || IsModuleConstant(); }
+  bool IsNamespaceConstant() const { return kind() == kNamespaceConstant; }
+  bool IsValue() const { return IsExternConstant() || IsNamespaceConstant(); }
+  bool IsScope() const { return IsNamespace() || IsCallable(); }
+  bool IsCallable() const {
+    return IsMacro() || IsBuiltin() || IsRuntimeFunction() || IsIntrinsic() ||
+           IsMethod();
+  }
   virtual const char* type_name() const { return "<<unknown>>"; }
+  Scope* ParentScope() const { return parent_scope_; }
+
+  // The SourcePosition of the whole declarable. For example, for a macro
+  // this will encompass not only the signature, but also the body.
+  SourcePosition Position() const { return position_; }
+  void SetPosition(const SourcePosition& position) { position_ = position; }
+
+  // The SourcePosition of the identifying name of the declarable. For example,
+  // for a macro this will be the SourcePosition of the name.
+  // Note that this SourcePosition might not make sense for all kinds of
+  // declarables, in that case, the default SourcePosition is returned.
+  SourcePosition IdentifierPosition() const {
+    return identifier_position_.source.IsValid() ? identifier_position_
+                                                 : position_;
+  }
+  void SetIdentifierPosition(const SourcePosition& position) {
+    identifier_position_ = position;
+  }
+
+  bool IsUserDefined() const { return is_user_defined_; }
+  void SetIsUserDefined(bool is_user_defined) {
+    is_user_defined_ = is_user_defined;
+  }
 
  protected:
   explicit Declarable(Kind kind) : kind_(kind) {}
 
  private:
   const Kind kind_;
+  Scope* const parent_scope_ = CurrentScope::Get();
+  SourcePosition position_ = CurrentSourcePosition::Get();
+  SourcePosition identifier_position_ = SourcePosition::Invalid();
+  bool is_user_defined_ = true;
 };
 
 #define DECLARE_DECLARABLE_BOILERPLATE(x, y)                  \
@@ -78,10 +144,102 @@ class Declarable {
     return static_cast<const x*>(declarable);                 \
   }
 
+// Information about what code caused a specialization to exist. This is used
+// for error reporting.
+struct SpecializationRequester {
+  // The position of the expression that caused this specialization.
+  SourcePosition position;
+  // The Scope which contains the expression that caused this specialization.
+  // It may in turn also be within a specialization, which allows us to print
+  // the stack of requesters when an error occurs.
+  Scope* scope;
+  // The name of the specialization.
+  std::string name;
+
+  static SpecializationRequester None() {
+    return {SourcePosition::Invalid(), nullptr, ""};
+  }
+
+  bool IsNone() const {
+    return position == SourcePosition::Invalid() && scope == nullptr &&
+           name == "";
+  }
+  SpecializationRequester(SourcePosition position, Scope* scope,
+                          std::string name);
+};
+
+class Scope : public Declarable {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(Scope, scope)
+  explicit Scope(Declarable::Kind kind) : Declarable(kind) {}
+
+  std::vector<Declarable*> LookupShallow(const QualifiedName& name) {
+    if (!name.HasNamespaceQualification()) return declarations_[name.name];
+    Scope* child = nullptr;
+    for (Declarable* declarable :
+         declarations_[name.namespace_qualification.front()]) {
+      if (Scope* scope = Scope::DynamicCast(declarable)) {
+        if (child != nullptr) {
+          ReportError("ambiguous reference to scope ",
+                      name.namespace_qualification.front());
+        }
+        child = scope;
+      }
+    }
+    if (child == nullptr) return {};
+    return child->LookupShallow(name.DropFirstNamespaceQualification());
+  }
+
+  std::vector<Declarable*> Lookup(const QualifiedName& name);
+  template <class T>
+  T* AddDeclarable(const std::string& name, T* declarable) {
+    declarations_[name].push_back(declarable);
+    return declarable;
+  }
+
+  const SpecializationRequester& GetSpecializationRequester() const {
+    return requester_;
+  }
+  void SetSpecializationRequester(const SpecializationRequester& requester) {
+    requester_ = requester;
+  }
+
+ private:
+  std::unordered_map<std::string, std::vector<Declarable*>> declarations_;
+
+  // If this Scope was created for specializing a generic type or callable,
+  // then {requester_} refers to the place that caused the specialization so we
+  // can construct useful error messages.
+  SpecializationRequester requester_ = SpecializationRequester::None();
+};
+
+class Namespace : public Scope {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(Namespace, namespace)
+  explicit Namespace(const std::string& name)
+      : Scope(Declarable::kNamespace), name_(name) {}
+  const std::string& name() const { return name_; }
+  bool IsDefaultNamespace() const;
+  bool IsTestNamespace() const;
+
+ private:
+  std::string name_;
+};
+
+inline Namespace* CurrentNamespace() {
+  Scope* scope = CurrentScope::Get();
+  while (true) {
+    if (Namespace* n = Namespace::DynamicCast(scope)) {
+      return n;
+    }
+    scope = scope->ParentScope();
+  }
+}
+
 class Value : public Declarable {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(Value, value);
-  const std::string& name() const { return name_; }
+  DECLARE_DECLARABLE_BOILERPLATE(Value, value)
+  const Identifier* name() const { return name_; }
   virtual bool IsConst() const { return true; }
   VisitResult value() const { return *value_; }
   const Type* type() const { return type_; }
@@ -92,56 +250,59 @@ class Value : public Declarable {
   }
 
  protected:
-  Value(Kind kind, const Type* type, const std::string& name)
+  Value(Kind kind, const Type* type, Identifier* name)
       : Declarable(kind), type_(type), name_(name) {}
 
  private:
   const Type* type_;
-  std::string name_;
+  Identifier* name_;
   base::Optional<VisitResult> value_;
 };
 
-class ModuleConstant : public Value {
+class NamespaceConstant : public Value {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(ModuleConstant, constant);
+  DECLARE_DECLARABLE_BOILERPLATE(NamespaceConstant, constant)
 
-  const std::string& constant_name() const { return constant_name_; }
+  const std::string& external_name() const { return external_name_; }
+  Expression* body() const { return body_; }
 
  private:
   friend class Declarations;
-  explicit ModuleConstant(std::string constant_name, const Type* type)
-      : Value(Declarable::kModuleConstant, type, constant_name),
-        constant_name_(std::move(constant_name)) {}
+  explicit NamespaceConstant(Identifier* constant_name,
+                             std::string external_name, const Type* type,
+                             Expression* body)
+      : Value(Declarable::kNamespaceConstant, type, constant_name),
+        external_name_(std::move(external_name)),
+        body_(body) {}
 
-  std::string constant_name_;
+  std::string external_name_;
+  Expression* body_;
 };
 
 class ExternConstant : public Value {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(ExternConstant, constant);
+  DECLARE_DECLARABLE_BOILERPLATE(ExternConstant, constant)
 
  private:
   friend class Declarations;
-  explicit ExternConstant(std::string name, const Type* type, std::string value)
-      : Value(Declarable::kExternConstant, type, std::move(name)) {
+  explicit ExternConstant(Identifier* name, const Type* type, std::string value)
+      : Value(Declarable::kExternConstant, type, name) {
     set_value(VisitResult(type, std::move(value)));
   }
 };
 
-class Callable : public Declarable {
+enum class OutputType {
+  kCSA,
+  kCC,
+};
+
+class Callable : public Scope {
  public:
-  static Callable* cast(Declarable* declarable) {
-    assert(declarable->IsMacro() || declarable->IsBuiltin() ||
-           declarable->IsRuntimeFunction());
-    return static_cast<Callable*>(declarable);
-  }
-  static const Callable* cast(const Declarable* declarable) {
-    assert(declarable->IsMacro() || declarable->IsBuiltin() ||
-           declarable->IsRuntimeFunction());
-    return static_cast<const Callable*>(declarable);
-  }
-  const std::string& name() const { return name_; }
+  DECLARE_DECLARABLE_BOILERPLATE(Callable, callable)
+  const std::string& ExternalName() const { return external_name_; }
+  const std::string& ReadableName() const { return readable_name_; }
   const Signature& signature() const { return signature_; }
+  bool IsTransitioning() const { return signature().transitioning; }
   const NameVector& parameter_names() const {
     return signature_.parameter_names;
   }
@@ -150,146 +311,363 @@ class Callable : public Declarable {
   }
   void IncrementReturns() { ++returns_; }
   bool HasReturns() const { return returns_; }
-  base::Optional<Generic*> generic() const { return generic_; }
+  base::Optional<Statement*> body() const { return body_; }
+  bool IsExternal() const { return !body_.has_value(); }
+  virtual bool ShouldBeInlined(OutputType output_type) const {
+    // C++ output doesn't support exiting to labels, so functions with labels in
+    // the signature must be inlined.
+    return output_type == OutputType::kCC && !signature().labels.empty();
+  }
+  bool ShouldGenerateExternalCode(OutputType output_type) const {
+    return !ShouldBeInlined(output_type);
+  }
+
+  static std::string PrefixNameForCCOutput(const std::string& name) {
+    // If a Torque macro requires a C++ runtime function to be generated, then
+    // the generated function begins with this prefix to avoid any naming
+    // collisions with the generated CSA function for the same macro.
+    return "TqRuntime" + name;
+  }
+
+  // Name to use in runtime C++ code.
+  virtual std::string CCName() const {
+    return PrefixNameForCCOutput(ExternalName());
+  }
 
  protected:
-  Callable(Declarable::Kind kind, const std::string& name,
-           const Signature& signature, base::Optional<Generic*> generic)
-      : Declarable(kind),
-        name_(name),
-        signature_(signature),
+  Callable(Declarable::Kind kind, std::string external_name,
+           std::string readable_name, Signature signature,
+           base::Optional<Statement*> body)
+      : Scope(kind),
+        external_name_(std::move(external_name)),
+
+        readable_name_(std::move(readable_name)),
+        signature_(std::move(signature)),
         returns_(0),
-        generic_(generic) {}
+        body_(body) {
+    DCHECK(!body || *body);
+  }
 
  private:
-  std::string name_;
+  std::string external_name_;
+  std::string readable_name_;
   Signature signature_;
   size_t returns_;
-  base::Optional<Generic*> generic_;
+  base::Optional<Statement*> body_;
 };
 
 class Macro : public Callable {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(Macro, macro);
+  DECLARE_DECLARABLE_BOILERPLATE(Macro, macro)
+  bool ShouldBeInlined(OutputType output_type) const override {
+    for (const LabelDeclaration& label : signature().labels) {
+      for (const Type* type : label.types) {
+        if (type->StructSupertype()) return true;
+      }
+    }
+    // Intrinsics that are used internally in Torque and implemented as torque
+    // code should be inlined and not generate C++ definitions.
+    if (ReadableName()[0] == '%') return true;
+    return Callable::ShouldBeInlined(output_type);
+  }
 
- private:
-  friend class Declarations;
-  Macro(const std::string& name, const Signature& signature,
-        base::Optional<Generic*> generic)
-      : Callable(Declarable::kMacro, name, signature, generic) {
+  void SetUsed() { used_ = true; }
+  bool IsUsed() const { return used_; }
+
+ protected:
+  Macro(Declarable::Kind kind, std::string external_name,
+        std::string readable_name, const Signature& signature,
+        base::Optional<Statement*> body)
+      : Callable(kind, std::move(external_name), std::move(readable_name),
+                 signature, body),
+        used_(false) {
     if (signature.parameter_types.var_args) {
       ReportError("Varargs are not supported for macros.");
     }
   }
+
+ private:
+  bool used_;
 };
 
-class MacroList : public Declarable {
+class ExternMacro : public Macro {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(MacroList, macro_list);
-  const std::vector<Macro*>& list() { return list_; }
-  Macro* AddMacro(Macro* macro) {
-    list_.emplace_back(macro);
-    return macro;
+  DECLARE_DECLARABLE_BOILERPLATE(ExternMacro, ExternMacro)
+
+  const std::string& external_assembler_name() const {
+    return external_assembler_name_;
+  }
+
+  std::string CCName() const override {
+    return "TorqueRuntimeMacroShims::" + external_assembler_name() +
+           "::" + ExternalName();
   }
 
  private:
   friend class Declarations;
-  MacroList() : Declarable(Declarable::kMacroList) {}
+  ExternMacro(const std::string& name, std::string external_assembler_name,
+              Signature signature)
+      : Macro(Declarable::kExternMacro, name, name, std::move(signature),
+              base::nullopt),
+        external_assembler_name_(std::move(external_assembler_name)) {}
 
-  std::vector<Macro*> list_;
+  std::string external_assembler_name_;
+};
+
+class TorqueMacro : public Macro {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(TorqueMacro, TorqueMacro)
+  bool IsExportedToCSA() const { return exported_to_csa_; }
+  std::string CCName() const override {
+    // Exported functions must have unique and C++-friendly readable names, so
+    // prefer those wherever possible.
+    return PrefixNameForCCOutput(IsExportedToCSA() ? ReadableName()
+                                                   : ExternalName());
+  }
+
+ protected:
+  TorqueMacro(Declarable::Kind kind, std::string external_name,
+              std::string readable_name, const Signature& signature,
+              base::Optional<Statement*> body, bool is_user_defined,
+              bool exported_to_csa)
+      : Macro(kind, std::move(external_name), std::move(readable_name),
+              signature, body),
+        exported_to_csa_(exported_to_csa) {
+    SetIsUserDefined(is_user_defined);
+  }
+
+ private:
+  friend class Declarations;
+  TorqueMacro(std::string external_name, std::string readable_name,
+              const Signature& signature, base::Optional<Statement*> body,
+              bool is_user_defined, bool exported_to_csa)
+      : TorqueMacro(Declarable::kTorqueMacro, std::move(external_name),
+                    std::move(readable_name), signature, body, is_user_defined,
+                    exported_to_csa) {}
+
+  bool exported_to_csa_ = false;
+};
+
+class Method : public TorqueMacro {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(Method, Method)
+  bool ShouldBeInlined(OutputType output_type) const override {
+    return Macro::ShouldBeInlined(output_type) ||
+           signature()
+               .parameter_types.types[signature().implicit_count]
+               ->IsStructType();
+  }
+  AggregateType* aggregate_type() const { return aggregate_type_; }
+
+ private:
+  friend class Declarations;
+  Method(AggregateType* aggregate_type, std::string external_name,
+         std::string readable_name, const Signature& signature, Statement* body)
+      : TorqueMacro(Declarable::kMethod, std::move(external_name),
+                    std::move(readable_name), signature, body, true, false),
+        aggregate_type_(aggregate_type) {}
+  AggregateType* aggregate_type_;
 };
 
 class Builtin : public Callable {
  public:
   enum Kind { kStub, kFixedArgsJavaScript, kVarArgsJavaScript };
-  DECLARE_DECLARABLE_BOILERPLATE(Builtin, builtin);
+  DECLARE_DECLARABLE_BOILERPLATE(Builtin, builtin)
   Kind kind() const { return kind_; }
   bool IsStub() const { return kind_ == kStub; }
   bool IsVarArgsJavaScript() const { return kind_ == kVarArgsJavaScript; }
   bool IsFixedArgsJavaScript() const { return kind_ == kFixedArgsJavaScript; }
-  bool IsExternal() const { return external_; }
 
  private:
   friend class Declarations;
-  Builtin(const std::string& name, Builtin::Kind kind, bool external,
-          const Signature& signature, base::Optional<Generic*> generic)
-      : Callable(Declarable::kBuiltin, name, signature, generic),
-        kind_(kind),
-        external_(external) {}
+  Builtin(std::string external_name, std::string readable_name,
+          Builtin::Kind kind, const Signature& signature,
+          base::Optional<Statement*> body)
+      : Callable(Declarable::kBuiltin, std::move(external_name),
+                 std::move(readable_name), signature, body),
+        kind_(kind) {}
 
   Kind kind_;
-  bool external_;
 };
 
 class RuntimeFunction : public Callable {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(RuntimeFunction, runtime);
+  DECLARE_DECLARABLE_BOILERPLATE(RuntimeFunction, runtime)
 
  private:
   friend class Declarations;
-  RuntimeFunction(const std::string& name, const Signature& signature,
-                  base::Optional<Generic*> generic)
-      : Callable(Declarable::kRuntimeFunction, name, signature, generic) {}
+  RuntimeFunction(const std::string& name, const Signature& signature)
+      : Callable(Declarable::kRuntimeFunction, name, name, signature,
+                 base::nullopt) {}
 };
 
-class Generic : public Declarable {
+class Intrinsic : public Callable {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(Generic, generic);
+  DECLARE_DECLARABLE_BOILERPLATE(Intrinsic, intrinsic)
 
-  GenericDeclaration* declaration() const { return declaration_; }
+ private:
+  friend class Declarations;
+  Intrinsic(std::string name, const Signature& signature)
+      : Callable(Declarable::kIntrinsic, name, name, signature, base::nullopt) {
+    if (signature.parameter_types.var_args) {
+      ReportError("Varargs are not supported for intrinsics.");
+    }
+  }
+};
+
+class TypeConstraint {
+ public:
+  base::Optional<std::string> IsViolated(const Type*) const;
+
+  static TypeConstraint Unconstrained() { return {}; }
+  static TypeConstraint SubtypeConstraint(const Type* upper_bound) {
+    TypeConstraint result;
+    result.upper_bound = {upper_bound};
+    return result;
+  }
+
+ private:
+  base::Optional<const Type*> upper_bound;
+};
+
+base::Optional<std::string> FindConstraintViolation(
+    const std::vector<const Type*>& types,
+    const std::vector<TypeConstraint>& constraints);
+
+std::vector<TypeConstraint> ComputeConstraints(
+    Scope* scope, const GenericParameters& parameters);
+
+template <class SpecializationType, class DeclarationType>
+class GenericDeclarable : public Declarable {
+ private:
+  using Map = std::unordered_map<TypeVector, SpecializationType,
+                                 base::hash<TypeVector>>;
+
+ public:
+  void AddSpecialization(const TypeVector& type_arguments,
+                         SpecializationType specialization) {
+    DCHECK_EQ(0, specializations_.count(type_arguments));
+    if (auto violation =
+            FindConstraintViolation(type_arguments, Constraints())) {
+      Error(*violation).Throw();
+    }
+    specializations_[type_arguments] = specialization;
+  }
+  base::Optional<SpecializationType> GetSpecialization(
+      const TypeVector& type_arguments) const {
+    auto it = specializations_.find(type_arguments);
+    if (it != specializations_.end()) return it->second;
+    return base::nullopt;
+  }
+
+  using iterator = typename Map::const_iterator;
+  iterator begin() const { return specializations_.begin(); }
+  iterator end() const { return specializations_.end(); }
+
   const std::string& name() const { return name_; }
-  Module* module() const { return module_; }
+  auto declaration() const { return generic_declaration_->declaration; }
+  const GenericParameters& generic_parameters() const {
+    return generic_declaration_->generic_parameters;
+  }
+
+  const std::vector<TypeConstraint>& Constraints() {
+    if (!constraints_)
+      constraints_ = {ComputeConstraints(ParentScope(), generic_parameters())};
+    return *constraints_;
+  }
+
+ protected:
+  GenericDeclarable(Declarable::Kind kind, const std::string& name,
+                    DeclarationType generic_declaration)
+      : Declarable(kind),
+        name_(name),
+        generic_declaration_(generic_declaration) {
+    DCHECK(!generic_declaration->generic_parameters.empty());
+  }
+
+ private:
+  std::string name_;
+  DeclarationType generic_declaration_;
+  Map specializations_;
+  base::Optional<std::vector<TypeConstraint>> constraints_;
+};
+
+class GenericCallable
+    : public GenericDeclarable<Callable*, GenericCallableDeclaration*> {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(GenericCallable, generic_callable)
+
+  base::Optional<Statement*> CallableBody();
+
+  TypeArgumentInference InferSpecializationTypes(
+      const TypeVector& explicit_specialization_types,
+      const std::vector<base::Optional<const Type*>>& arguments);
 
  private:
   friend class Declarations;
-  Generic(const std::string& name, Module* module,
-          GenericDeclaration* declaration)
-      : Declarable(Declarable::kGeneric),
-        name_(name),
-        module_(module),
-        declaration_(declaration) {}
-
-  std::string name_;
-  Module* module_;
-  GenericDeclaration* declaration_;
+  GenericCallable(const std::string& name,
+                  GenericCallableDeclaration* generic_declaration)
+      : GenericDeclarable<Callable*, GenericCallableDeclaration*>(
+            Declarable::kGenericCallable, name, generic_declaration) {}
 };
 
-class GenericList : public Declarable {
+class GenericType
+    : public GenericDeclarable<const Type*, GenericTypeDeclaration*> {
  public:
-  DECLARE_DECLARABLE_BOILERPLATE(GenericList, generic_list);
-  const std::vector<Generic*>& list() { return list_; }
-  Generic* AddGeneric(Generic* generic) {
-    list_.push_back(generic);
-    return generic;
+  DECLARE_DECLARABLE_BOILERPLATE(GenericType, generic_type)
+
+ private:
+  friend class Declarations;
+  GenericType(const std::string& name,
+              GenericTypeDeclaration* generic_declaration)
+      : GenericDeclarable<const Type*, GenericTypeDeclaration*>(
+            Declarable::kGenericType, name, generic_declaration) {}
+};
+
+class TypeAlias : public Declarable {
+ public:
+  DECLARE_DECLARABLE_BOILERPLATE(TypeAlias, type_alias)
+
+  const Type* type() const {
+    if (type_) return *type_;
+    return Resolve();
+  }
+  const Type* Resolve() const;
+  bool IsRedeclaration() const { return redeclaration_; }
+  SourcePosition GetDeclarationPosition() const {
+    return declaration_position_;
   }
 
  private:
   friend class Declarations;
-  GenericList() : Declarable(Declarable::kGenericList) {}
+  friend class TypeVisitor;
 
-  std::vector<Generic*> list_;
-};
+  explicit TypeAlias(
+      const Type* type, bool redeclaration,
+      SourcePosition declaration_position = SourcePosition::Invalid())
+      : Declarable(Declarable::kTypeAlias),
+        type_(type),
+        redeclaration_(redeclaration),
+        declaration_position_(declaration_position) {}
+  explicit TypeAlias(
+      TypeDeclaration* type, bool redeclaration,
+      SourcePosition declaration_position = SourcePosition::Invalid())
+      : Declarable(Declarable::kTypeAlias),
+        delayed_(type),
+        redeclaration_(redeclaration),
+        declaration_position_(declaration_position) {}
 
-typedef std::pair<Generic*, TypeVector> SpecializationKey;
-
-class TypeAlias : public Declarable {
- public:
-  DECLARE_DECLARABLE_BOILERPLATE(TypeAlias, type_alias);
-
-  const Type* type() const { return type_; }
-
- private:
-  friend class Declarations;
-  explicit TypeAlias(const Type* type)
-      : Declarable(Declarable::kTypeAlias), type_(type) {}
-
-  const Type* type_;
+  mutable bool being_resolved_ = false;
+  mutable base::Optional<TypeDeclaration*> delayed_;
+  mutable base::Optional<const Type*> type_;
+  bool redeclaration_;
+  const SourcePosition declaration_position_;
 };
 
 std::ostream& operator<<(std::ostream& os, const Callable& m);
 std::ostream& operator<<(std::ostream& os, const Builtin& b);
 std::ostream& operator<<(std::ostream& os, const RuntimeFunction& b);
-std::ostream& operator<<(std::ostream& os, const Generic& g);
+std::ostream& operator<<(std::ostream& os, const GenericCallable& g);
 
 #undef DECLARE_DECLARABLE_BOILERPLATE
 

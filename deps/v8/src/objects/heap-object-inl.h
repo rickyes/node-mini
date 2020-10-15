@@ -7,41 +7,17 @@
 
 #include "src/objects/heap-object.h"
 
-#include "src/heap/heap-write-barrier-inl.h"
-
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
 
 namespace v8 {
 namespace internal {
 
-OBJECT_CONSTRUCTORS_IMPL(HeapObjectPtr, ObjectPtr)
-
-#define TYPE_CHECK_FORWARDER(Type)                           \
-  bool HeapObjectPtr::Is##Type() const {                     \
-    return reinterpret_cast<HeapObject*>(ptr())->Is##Type(); \
-  }
-HEAP_OBJECT_TYPE_LIST(TYPE_CHECK_FORWARDER)
-#undef TYPE_CHECK_FORWARDER
-
-Map* HeapObjectPtr::map() const {
-  return Map::cast(READ_FIELD(this, kMapOffset));
-}
-
-ObjectSlot HeapObjectPtr::map_slot() {
-  return ObjectSlot(FIELD_ADDR(this, kMapOffset));
-}
-
-WriteBarrierMode HeapObjectPtr::GetWriteBarrierMode(
-    const DisallowHeapAllocation& promise) {
-  Heap* heap = Heap::FromWritableHeapObject(this);
-  if (heap->incremental_marking()->IsMarking()) return UPDATE_WRITE_BARRIER;
-  if (Heap::InNewSpace(*this)) return SKIP_WRITE_BARRIER;
-  return UPDATE_WRITE_BARRIER;
-}
-
-ObjectSlot HeapObjectPtr::RawField(int byte_offset) const {
-  return ObjectSlot(FIELD_ADDR(this, byte_offset));
+HeapObject::HeapObject(Address ptr, AllowInlineSmiStorage allow_smi)
+    : Object(ptr) {
+  SLOW_DCHECK(
+      (allow_smi == AllowInlineSmiStorage::kAllowBeingASmi && IsSmi()) ||
+      IsHeapObject());
 }
 
 }  // namespace internal

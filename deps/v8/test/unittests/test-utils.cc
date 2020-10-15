@@ -6,131 +6,81 @@
 
 #include "include/libplatform/libplatform.h"
 #include "include/v8.h"
-#include "src/api-inl.h"
+#include "src/api/api-inl.h"
 #include "src/base/platform/time.h"
-#include "src/flags.h"
-#include "src/isolate.h"
-#include "src/objects-inl.h"
-#include "src/v8.h"
+#include "src/execution/isolate.h"
+#include "src/flags/flags.h"
+#include "src/init/v8.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 
-// static
-v8::ArrayBuffer::Allocator* TestWithIsolate::array_buffer_allocator_ = nullptr;
+namespace {
+// counter_lookup_callback doesn't pass through any state information about
+// the current Isolate, so we have to store the current counter map somewhere.
+// Fortunately tests run serially, so we can just store it in a static global.
+CounterMap* kCurrentCounterMap = nullptr;
+}  // namespace
 
-// static
-Isolate* TestWithIsolate::isolate_ = nullptr;
+IsolateWrapper::IsolateWrapper(CountersMode counters_mode)
+    : array_buffer_allocator_(
+          v8::ArrayBuffer::Allocator::NewDefaultAllocator()) {
+  CHECK_NULL(kCurrentCounterMap);
 
-TestWithIsolate::TestWithIsolate()
-    : isolate_scope_(isolate()), handle_scope_(isolate()) {}
-
-TestWithIsolate::~TestWithIsolate() = default;
-
-// static
-void TestWithIsolate::SetUpTestCase() {
-  Test::SetUpTestCase();
-  EXPECT_EQ(nullptr, isolate_);
   v8::Isolate::CreateParams create_params;
-  array_buffer_allocator_ = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
-  create_params.array_buffer_allocator = array_buffer_allocator_;
+  create_params.array_buffer_allocator = array_buffer_allocator_.get();
+
+  if (counters_mode == kEnableCounters) {
+    counter_map_ = std::make_unique<CounterMap>();
+    kCurrentCounterMap = counter_map_.get();
+
+    create_params.counter_lookup_callback = [](const char* name) {
+      CHECK_NOT_NULL(kCurrentCounterMap);
+      // If the name doesn't exist in the counter map, operator[] will default
+      // initialize it to zero.
+      return &(*kCurrentCounterMap)[name];
+    };
+  } else {
+    create_params.counter_lookup_callback = [](const char* name) -> int* {
+      return nullptr;
+    };
+  }
+
   isolate_ = v8::Isolate::New(create_params);
-  EXPECT_TRUE(isolate_ != nullptr);
+  CHECK_NOT_NULL(isolate());
 }
 
-
-// static
-void TestWithIsolate::TearDownTestCase() {
-  ASSERT_TRUE(isolate_ != nullptr);
+IsolateWrapper::~IsolateWrapper() {
   v8::Platform* platform = internal::V8::GetCurrentPlatform();
-  ASSERT_TRUE(platform != nullptr);
-  while (platform::PumpMessageLoop(platform, isolate_)) continue;
+  CHECK_NOT_NULL(platform);
+  while (platform::PumpMessageLoop(platform, isolate())) continue;
   isolate_->Dispose();
-  isolate_ = nullptr;
-  delete array_buffer_allocator_;
-  Test::TearDownTestCase();
-}
-
-Local<Value> TestWithIsolate::RunJS(const char* source) {
-  Local<Script> script =
-      v8::Script::Compile(
-          isolate()->GetCurrentContext(),
-          v8::String::NewFromUtf8(isolate(), source, v8::NewStringType::kNormal)
-              .ToLocalChecked())
-          .ToLocalChecked();
-  return script->Run(isolate()->GetCurrentContext()).ToLocalChecked();
-}
-
-Local<Value> TestWithIsolate::RunJS(
-    String::ExternalOneByteStringResource* source) {
-  Local<Script> script =
-      v8::Script::Compile(
-          isolate()->GetCurrentContext(),
-          v8::String::NewExternalOneByte(isolate(), source).ToLocalChecked())
-          .ToLocalChecked();
-  return script->Run(isolate()->GetCurrentContext()).ToLocalChecked();
-}
-
-TestWithContext::TestWithContext()
-    : context_(Context::New(isolate())), context_scope_(context_) {}
-
-TestWithContext::~TestWithContext() = default;
-
-v8::Local<v8::String> TestWithContext::NewString(const char* string) {
-  return v8::String::NewFromUtf8(v8_isolate(), string,
-                                 v8::NewStringType::kNormal)
-      .ToLocalChecked();
-}
-
-void TestWithContext::SetGlobalProperty(const char* name,
-                                        v8::Local<v8::Value> value) {
-  CHECK(v8_context()
-            ->Global()
-            ->Set(v8_context(), NewString(name), value)
-            .FromJust());
+  if (counter_map_) {
+    CHECK_EQ(kCurrentCounterMap, counter_map_.get());
+    kCurrentCounterMap = nullptr;
+  } else {
+    CHECK_NULL(kCurrentCounterMap);
+  }
 }
 
 namespace internal {
 
-TestWithIsolate::~TestWithIsolate() = default;
-
-TestWithIsolateAndZone::~TestWithIsolateAndZone() = default;
-
-Factory* TestWithIsolate::factory() const { return isolate()->factory(); }
-
-Handle<Object> TestWithIsolate::RunJSInternal(const char* source) {
-  return Utils::OpenHandle(*::v8::TestWithIsolate::RunJS(source));
+SaveFlags::SaveFlags() {
+  // For each flag, save the current flag value.
+#define FLAG_MODE_APPLY(ftype, ctype, nam, def, cmt) SAVED_##nam = FLAG_##nam;
+#include "src/flags/flag-definitions.h"  // NOLINT
+#undef FLAG_MODE_APPLY
 }
-
-Handle<Object> TestWithIsolate::RunJSInternal(
-    ::v8::String::ExternalOneByteStringResource* source) {
-  return Utils::OpenHandle(*::v8::TestWithIsolate::RunJS(source));
-}
-
-base::RandomNumberGenerator* TestWithIsolate::random_number_generator() const {
-  return isolate()->random_number_generator();
-}
-
-TestWithZone::~TestWithZone() = default;
-
-TestWithNativeContext::~TestWithNativeContext() = default;
-
-Handle<Context> TestWithNativeContext::native_context() const {
-  return isolate()->native_context();
-}
-
-SaveFlags::SaveFlags() { non_default_flags_ = FlagList::argv(); }
 
 SaveFlags::~SaveFlags() {
-  FlagList::ResetAllFlags();
-  int argc = static_cast<int>(non_default_flags_->size());
-  FlagList::SetFlagsFromCommandLine(
-      &argc, const_cast<char**>(non_default_flags_->data()),
-      false /* remove_flags */);
-  for (auto flag = non_default_flags_->begin();
-       flag != non_default_flags_->end(); ++flag) {
-    delete[] * flag;
+  // For each flag, set back the old flag value if it changed (don't write the
+  // flag if it didn't change, to keep TSAN happy).
+#define FLAG_MODE_APPLY(ftype, ctype, nam, def, cmt) \
+  if (SAVED_##nam != FLAG_##nam) {                   \
+    FLAG_##nam = SAVED_##nam;                        \
   }
-  delete non_default_flags_;
+#include "src/flags/flag-definitions.h"  // NOLINT
+#undef FLAG_MODE_APPLY
 }
 
 }  // namespace internal

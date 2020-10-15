@@ -4,6 +4,8 @@
 
 #include <stdlib.h>
 
+#include "src/heap/safepoint.h"
+
 #ifdef __linux__
 #include <errno.h>
 #include <fcntl.h>
@@ -14,12 +16,12 @@
 
 #include <utility>
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
-#include "src/global-handles.h"
+#include "src/handles/global-handles.h"
 #include "src/heap/incremental-marking.h"
 #include "src/heap/spaces.h"
-#include "src/objects-inl.h"
+#include "src/objects/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 
@@ -71,14 +73,14 @@ class MockPlatform : public TestPlatform {
 
     void PostDelayedTask(std::unique_ptr<Task> task,
                          double delay_in_seconds) override {
-      UNREACHABLE();
-    };
+      task_ = std::move(task);
+    }
 
     void PostIdleTask(std::unique_ptr<IdleTask> task) override {
       UNREACHABLE();
     }
 
-    bool IdleTasksEnabled() override { return false; };
+    bool IdleTasksEnabled() override { return false; }
 
     bool PendingTask() { return task_ != nullptr; }
 
@@ -98,13 +100,17 @@ class MockPlatform : public TestPlatform {
 
 TEST(IncrementalMarkingUsingTasks) {
   if (!i::FLAG_incremental_marking) return;
+  FLAG_stress_concurrent_allocation = false;  // For SimulateFullSpace.
   FLAG_stress_incremental_marking = false;
   CcTest::InitializeVM();
   MockPlatform platform;
   i::heap::SimulateFullSpace(CcTest::heap()->old_space());
   i::IncrementalMarking* marking = CcTest::heap()->incremental_marking();
   marking->Stop();
-  marking->Start(i::GarbageCollectionReason::kTesting);
+  {
+    SafepointScope scope(CcTest::heap());
+    marking->Start(i::GarbageCollectionReason::kTesting);
+  }
   CHECK(platform.PendingTask());
   while (platform.PendingTask()) {
     platform.PerformTask();

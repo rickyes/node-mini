@@ -11,6 +11,10 @@ For simplicity, we check all pyl files on any changes in this folder.
 import ast
 import os
 
+try:
+  basestring       # Python 2
+except NameError:  # Python 3
+  basestring = str
 
 SUPPORTED_BUILDER_SPEC_KEYS = [
   'swarming_dimensions',
@@ -26,10 +30,13 @@ SUPPORTED_SWARMING_DIMENSIONS = [
   'device_os',
   'device_type',
   'os',
+  'pool',
 ]
 
 # This is not an exhaustive list. It only reflects what we currently use. If
-# there's need to specify a different property, just add it here.
+# there's need to specify a different property, add it here and update the
+# properties passed to swarming in:
+# //build/scripts/slave/recipe_modules/v8/testing.py.
 SUPPORTED_SWARMING_TASK_ATTRS = [
   'expiration',
   'hard_timeout',
@@ -115,9 +122,9 @@ def _check_test(error_msg, test):
   if not all(isinstance(x, basestring) for x in test_args):
     errors += error_msg('If specified, all test_args must be strings')
 
-  # Limit shards to 12 to avoid erroneous resource exhaustion.
+  # Limit shards to 14 to avoid erroneous resource exhaustion.
   errors += _check_int_range(
-      error_msg, test, 'shards', lower_bound=1, upper_bound=12)
+      error_msg, test, 'shards', lower_bound=1, upper_bound=14)
 
   variant = test.get('variant', 'default')
   if not variant or not isinstance(variant, basestring):
@@ -163,7 +170,7 @@ def _check_test_spec(file_path, raw_pyl):
 
 def CheckChangeOnCommit(input_api, output_api):
   def file_filter(regexp):
-    return lambda f: input_api.FilterSourceFile(f, white_list=(regexp,))
+    return lambda f: input_api.FilterSourceFile(f, files_to_check=(regexp,))
 
   # Calculate which files are affected.
   if input_api.AffectedFiles(False, file_filter(r'.*PRESUBMIT\.py')):

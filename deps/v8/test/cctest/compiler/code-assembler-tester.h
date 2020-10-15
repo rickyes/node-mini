@@ -5,11 +5,11 @@
 #ifndef V8_TEST_CCTEST_COMPILER_CODE_ASSEMBLER_TESTER_H_
 #define V8_TEST_CCTEST_COMPILER_CODE_ASSEMBLER_TESTER_H_
 
+#include "src/codegen/interface-descriptors.h"
 #include "src/compiler/code-assembler.h"
 #include "src/compiler/raw-machine-assembler.h"
-#include "src/handles.h"
-#include "src/interface-descriptors.h"
-#include "src/isolate.h"
+#include "src/execution/isolate.h"
+#include "src/handles/handles.h"
 #include "test/cctest/compiler/function-tester.h"
 
 namespace v8 {
@@ -18,35 +18,39 @@ namespace compiler {
 
 class CodeAssemblerTester {
  public:
+  CodeAssemblerTester(Isolate* isolate,
+                      const CallInterfaceDescriptor& descriptor,
+                      const char* name = "test")
+      : zone_(isolate->allocator(), ZONE_NAME, kCompressGraphZone),
+        scope_(isolate),
+        state_(isolate, &zone_, descriptor,
+               CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING, name,
+               PoisoningMitigationLevel::kDontPoison, Builtins::kNoBuiltinId) {}
+
   // Test generating code for a stub. Assumes VoidDescriptor call interface.
   explicit CodeAssemblerTester(Isolate* isolate, const char* name = "test")
-      : zone_(isolate->allocator(), ZONE_NAME),
-        scope_(isolate),
-        state_(isolate, &zone_, VoidDescriptor{}, Code::STUB, name,
-               PoisoningMitigationLevel::kDontPoison) {}
+      : CodeAssemblerTester(isolate, VoidDescriptor{}, name) {}
 
   // Test generating code for a JS function (e.g. builtins).
   CodeAssemblerTester(Isolate* isolate, int parameter_count,
-                      Code::Kind kind = Code::BUILTIN,
+                      CodeKind kind = CodeKind::BUILTIN,
                       const char* name = "test")
-      : zone_(isolate->allocator(), ZONE_NAME),
+      : zone_(isolate->allocator(), ZONE_NAME, kCompressGraphZone),
         scope_(isolate),
         state_(isolate, &zone_, parameter_count, kind, name,
                PoisoningMitigationLevel::kDontPoison) {}
 
-  CodeAssemblerTester(Isolate* isolate, Code::Kind kind,
+  CodeAssemblerTester(Isolate* isolate, CodeKind kind,
                       const char* name = "test")
-      : zone_(isolate->allocator(), ZONE_NAME),
-        scope_(isolate),
-        state_(isolate, &zone_, 0, kind, name,
-               PoisoningMitigationLevel::kDontPoison) {}
+      : CodeAssemblerTester(isolate, 0, kind, name) {}
 
   CodeAssemblerTester(Isolate* isolate, CallDescriptor* call_descriptor,
                       const char* name = "test")
-      : zone_(isolate->allocator(), ZONE_NAME),
+      : zone_(isolate->allocator(), ZONE_NAME, kCompressGraphZone),
         scope_(isolate),
-        state_(isolate, &zone_, call_descriptor, Code::STUB, name,
-               PoisoningMitigationLevel::kDontPoison, 0, -1) {}
+        state_(isolate, &zone_, call_descriptor,
+               CodeKind::DEOPT_ENTRIES_OR_FOR_TESTING, name,
+               PoisoningMitigationLevel::kDontPoison, Builtins::kNoBuiltinId) {}
 
   CodeAssemblerState* state() { return &state_; }
 
@@ -56,12 +60,14 @@ class CodeAssemblerTester {
   }
 
   Handle<Code> GenerateCode() {
-    return CodeAssembler::GenerateCode(
-        &state_, AssemblerOptions::Default(scope_.isolate()));
+    return GenerateCode(AssemblerOptions::Default(scope_.isolate()));
   }
 
   Handle<Code> GenerateCode(const AssemblerOptions& options) {
-    return CodeAssembler::GenerateCode(&state_, options);
+    if (state_.InsideBlock()) {
+      CodeAssembler(&state_).Unreachable();
+    }
+    return CodeAssembler::GenerateCode(&state_, options, nullptr);
   }
 
   Handle<Code> GenerateCodeCloseAndEscape() {

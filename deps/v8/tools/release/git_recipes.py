@@ -207,7 +207,7 @@ class GitRecipesMixin(object):
 
   def GitUpload(self, reviewer="", force=False, cq=False,
                 cq_dry_run=False, bypass_hooks=False, cc="", tbr_reviewer="",
-                no_autocc=False, **kwargs):
+                no_autocc=False, message_file=None, **kwargs):
     args = ["cl upload --send-mail"]
     if reviewer:
       args += ["-r", Quoted(reviewer)]
@@ -225,7 +225,8 @@ class GitRecipesMixin(object):
       args.append("--no-autocc")
     if cc:
       args += ["--cc", Quoted(cc)]
-    args += ["--gerrit"]
+    if message_file:
+      args += ["--message-file", Quoted(message_file)]
     # TODO(machenbach): Check output in forced mode. Verify that all required
     # base files were uploaded, if not retry.
     self.Git(MakeArgs(args), pipe=False, **kwargs)

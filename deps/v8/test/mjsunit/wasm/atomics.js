@@ -4,7 +4,6 @@
 
 // Flags: --experimental-wasm-threads
 
-load("test/mjsunit/wasm/wasm-constants.js");
 load("test/mjsunit/wasm/wasm-module-builder.js");
 
 const kMemtypeSize32 = 4;
@@ -26,8 +25,8 @@ function GetAtomicBinOpFunction(wasmExpression, alignment, offset) {
   builder.addImportedMemory("m", "imported_mem", 0, maxSize, "shared");
   builder.addFunction("main", kSig_i_ii)
     .addBody([
-      kExprGetLocal, 0,
-      kExprGetLocal, 1,
+      kExprLocalGet, 0,
+      kExprLocalGet, 1,
       kAtomicPrefix,
       wasmExpression, alignment, offset])
     .exportAs("main");
@@ -44,9 +43,9 @@ function GetAtomicCmpExchangeFunction(wasmExpression, alignment, offset) {
   builder.addImportedMemory("m", "imported_mem", 0, maxSize, "shared");
   builder.addFunction("main", kSig_i_iii)
     .addBody([
-      kExprGetLocal, 0,
-      kExprGetLocal, 1,
-      kExprGetLocal, 2,
+      kExprLocalGet, 0,
+      kExprLocalGet, 1,
+      kExprLocalGet, 2,
       kAtomicPrefix,
       wasmExpression, alignment, offset])
     .exportAs("main");
@@ -63,7 +62,7 @@ function GetAtomicLoadFunction(wasmExpression, alignment, offset) {
   builder.addImportedMemory("m", "imported_mem", 0, maxSize, "shared");
   builder.addFunction("main", kSig_i_i)
     .addBody([
-      kExprGetLocal, 0,
+      kExprLocalGet, 0,
       kAtomicPrefix,
       wasmExpression, alignment, offset])
     .exportAs("main");
@@ -80,8 +79,8 @@ function GetAtomicStoreFunction(wasmExpression, alignment, offset) {
   builder.addImportedMemory("m", "imported_mem", 0, maxSize, "shared");
   builder.addFunction("main", kSig_v_ii)
     .addBody([
-      kExprGetLocal, 0,
-      kExprGetLocal, 1,
+      kExprLocalGet, 0,
+      kExprLocalGet, 1,
       kAtomicPrefix,
       wasmExpression, alignment, offset])
     .exportAs("main");
@@ -438,14 +437,14 @@ function CmpExchgLoop(opcode, alignment) {
   let builder = new WasmModuleBuilder();
   builder.addImportedMemory("m", "imported_mem", 0, 2, "shared");
   builder.addFunction("main", makeSig([kWasmI32], []))
-      .addLocals({i64_count: 2})
+      .addLocals(kWasmI64, 2)
       .addBody([
         kExprLoop, kWasmStmt,
-          kExprGetLocal, 0,
-          kExprGetLocal, 1,
-          kExprGetLocal, 2,
+          kExprLocalGet, 0,
+          kExprLocalGet, 1,
+          kExprLocalGet, 2,
           kAtomicPrefix, opcode, alignment, 0,
-          kExprGetLocal, 1,
+          kExprLocalGet, 1,
           kExprI64Ne,
           kExprBrIf, 0,
           kExprEnd

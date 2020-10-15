@@ -33,10 +33,12 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <unordered_map>
 
 #include "src/base/macros.h"
 #include "src/base/platform/mutex.h"
+#include "src/inspector/injected-script.h"
 #include "src/inspector/protocol/Protocol.h"
 
 #include "include/v8-inspector.h"
@@ -75,36 +77,37 @@ class V8InspectorImpl : public V8Inspector {
   // V8Inspector implementation.
   std::unique_ptr<V8InspectorSession> connect(int contextGroupId,
                                               V8Inspector::Channel*,
-                                              const StringView& state) override;
+                                              StringView state) override;
   void contextCreated(const V8ContextInfo&) override;
   void contextDestroyed(v8::Local<v8::Context>) override;
-  v8::MaybeLocal<v8::Context> contextById(int groupId,
-                                          v8::Maybe<int> contextId) override;
+  v8::MaybeLocal<v8::Context> contextById(int contextId) override;
   void contextCollected(int contextGroupId, int contextId);
   void resetContextGroup(int contextGroupId) override;
   void idleStarted() override;
   void idleFinished() override;
-  unsigned exceptionThrown(v8::Local<v8::Context>, const StringView& message,
+  unsigned exceptionThrown(v8::Local<v8::Context>, StringView message,
                            v8::Local<v8::Value> exception,
-                           const StringView& detailedMessage,
-                           const StringView& url, unsigned lineNumber,
-                           unsigned columnNumber, std::unique_ptr<V8StackTrace>,
+                           StringView detailedMessage, StringView url,
+                           unsigned lineNumber, unsigned columnNumber,
+                           std::unique_ptr<V8StackTrace>,
                            int scriptId) override;
   void exceptionRevoked(v8::Local<v8::Context>, unsigned exceptionId,
-                        const StringView& message) override;
+                        StringView message) override;
   std::unique_ptr<V8StackTrace> createStackTrace(
       v8::Local<v8::StackTrace>) override;
   std::unique_ptr<V8StackTrace> captureStackTrace(bool fullStack) override;
-  void asyncTaskScheduled(const StringView& taskName, void* task,
+  void asyncTaskScheduled(StringView taskName, void* task,
                           bool recurring) override;
   void asyncTaskCanceled(void* task) override;
   void asyncTaskStarted(void* task) override;
   void asyncTaskFinished(void* task) override;
   void allAsyncTasksCanceled() override;
 
-  V8StackTraceId storeCurrentStackTrace(const StringView& description) override;
+  V8StackTraceId storeCurrentStackTrace(StringView description) override;
   void externalAsyncTaskStarted(const V8StackTraceId& parent) override;
   void externalAsyncTaskFinished(const V8StackTraceId& parent) override;
+
+  std::shared_ptr<Counters> enableCounters() override;
 
   unsigned nextExceptionId() { return ++m_lastExceptionId; }
   void enableStackCapturingIfNeeded();
@@ -127,20 +130,24 @@ class V8InspectorImpl : public V8Inspector {
 
   class EvaluateScope {
    public:
-    explicit EvaluateScope(v8::Isolate* isolate);
+    explicit EvaluateScope(const InjectedScript::Scope& scope);
     ~EvaluateScope();
 
     protocol::Response setTimeout(double timeout);
 
    private:
-    v8::Isolate* m_isolate;
     class TerminateTask;
     struct CancelToken;
+
+    const InjectedScript::Scope& m_scope;
+    v8::Isolate* m_isolate;
     std::shared_ptr<CancelToken> m_cancelToken;
     v8::Isolate::SafeForTerminationScope m_safeForTerminationScope;
   };
 
  private:
+  friend class Counters;
+
   v8::Isolate* m_isolate;
   V8InspectorClient* m_client;
   std::unique_ptr<V8Debugger> m_debugger;
@@ -170,6 +177,8 @@ class V8InspectorImpl : public V8Inspector {
   std::unordered_map<int, int> m_contextIdToGroupIdMap;
 
   std::unique_ptr<V8Console> m_console;
+
+  Counters* m_counters = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(V8InspectorImpl);
 };

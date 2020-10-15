@@ -5,7 +5,8 @@
 #ifndef V8_OBJECTS_ALLOCATION_SITE_H_
 #define V8_OBJECTS_ALLOCATION_SITE_H_
 
-#include "src/objects.h"
+#include "src/objects/objects.h"
+#include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -13,8 +14,11 @@
 namespace v8 {
 namespace internal {
 
-class AllocationSite : public Struct, public NeverReadOnlySpaceObject {
+enum InstanceType : uint16_t;
+
+class AllocationSite : public Struct {
  public:
+  NEVER_READ_ONLY_SPACE
   static const uint32_t kMaximumArrayBytesToPretransition = 8 * 1024;
   static const double kPretenureRatio;
   static const int kPretenureMinimumCreated = 100;
@@ -62,14 +66,14 @@ class AllocationSite : public Struct, public NeverReadOnlySpaceObject {
   bool IsNested();
 
   // transition_info bitfields, for constructed array transition info.
-  class ElementsKindBits : public BitField<ElementsKind, 0, 5> {};
-  class DoNotInlineBit : public BitField<bool, 5, 1> {};
+  using ElementsKindBits = base::BitField<ElementsKind, 0, 5>;
+  using DoNotInlineBit = base::BitField<bool, 5, 1>;
   // Unused bits 6-30.
 
   // Bitfields for pretenure_data
-  class MementoFoundCountBits : public BitField<int, 0, 26> {};
-  class PretenureDecisionBits : public BitField<PretenureDecision, 26, 3> {};
-  class DeoptDependentCodeBit : public BitField<bool, 29, 1> {};
+  using MementoFoundCountBits = base::BitField<int, 0, 26>;
+  using PretenureDecisionBits = base::BitField<PretenureDecision, 26, 3>;
+  using DeoptDependentCodeBit = base::BitField<bool, 29, 1>;
   STATIC_ASSERT(PretenureDecisionBits::kMax >= kLastPretenureDecisionValue);
 
   // Increments the mementos found counter and returns true when the first
@@ -78,7 +82,7 @@ class AllocationSite : public Struct, public NeverReadOnlySpaceObject {
 
   inline void IncrementMementoCreateCount();
 
-  PretenureFlag GetPretenureMode() const;
+  AllocationType GetAllocationType() const;
 
   void ResetPretenureDecision();
 
@@ -130,52 +134,46 @@ class AllocationSite : public Struct, public NeverReadOnlySpaceObject {
   static bool ShouldTrack(ElementsKind from, ElementsKind to);
   static inline bool CanTrack(InstanceType type);
 
-// Layout description.
-// AllocationSite has to start with TransitionInfoOrboilerPlateOffset
-// and end with WeakNext field.
-#define ALLOCATION_SITE_FIELDS(V)                     \
-  V(kTransitionInfoOrBoilerplateOffset, kPointerSize) \
-  V(kNestedSiteOffset, kPointerSize)                  \
-  V(kDependentCodeOffset, kPointerSize)               \
-  V(kCommonPointerFieldEndOffset, 0)                  \
-  V(kPretenureDataOffset, kInt32Size)                 \
-  V(kPretenureCreateCountOffset, kInt32Size)          \
-  /* Size of AllocationSite without WeakNext field */ \
-  V(kSizeWithoutWeakNext, 0)                          \
-  V(kWeakNextOffset, kPointerSize)                    \
-  /* Size of AllocationSite with WeakNext field */    \
-  V(kSizeWithWeakNext, 0)
+  // Layout description.
+  // AllocationSite has to start with TransitionInfoOrboilerPlateOffset
+  // and end with WeakNext field.
+  #define ALLOCATION_SITE_FIELDS(V)                     \
+    V(kStartOffset, 0)                                  \
+    V(kTransitionInfoOrBoilerplateOffset, kTaggedSize)  \
+    V(kNestedSiteOffset, kTaggedSize)                   \
+    V(kDependentCodeOffset, kTaggedSize)                \
+    V(kCommonPointerFieldEndOffset, 0)                  \
+    V(kPretenureDataOffset, kInt32Size)                 \
+    V(kPretenureCreateCountOffset, kInt32Size)          \
+    /* Size of AllocationSite without WeakNext field */ \
+    V(kSizeWithoutWeakNext, 0)                          \
+    V(kWeakNextOffset, kTaggedSize)                     \
+    /* Size of AllocationSite with WeakNext field */    \
+    V(kSizeWithWeakNext, 0)
 
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, ALLOCATION_SITE_FIELDS)
-
-  static const int kStartOffset = HeapObject::kHeaderSize;
+  #undef ALLOCATION_SITE_FIELDS
 
   class BodyDescriptor;
 
  private:
   inline bool PretenuringDecisionMade() const;
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AllocationSite);
+  OBJECT_CONSTRUCTORS(AllocationSite, Struct);
 };
 
-class AllocationMemento : public Struct {
+class AllocationMemento
+    : public TorqueGeneratedAllocationMemento<AllocationMemento, Struct> {
  public:
-  static const int kAllocationSiteOffset = HeapObject::kHeaderSize;
-  static const int kSize = kAllocationSiteOffset + kPointerSize;
-
   DECL_ACCESSORS(allocation_site, Object)
 
   inline bool IsValid() const;
-  inline AllocationSite* GetAllocationSite() const;
+  inline AllocationSite GetAllocationSite() const;
   inline Address GetAllocationSiteUnchecked() const;
 
   DECL_PRINTER(AllocationMemento)
-  DECL_VERIFIER(AllocationMemento)
 
-  DECL_CAST(AllocationMemento)
-
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(AllocationMemento);
+  TQ_OBJECT_CONSTRUCTORS(AllocationMemento)
 };
 
 }  // namespace internal

@@ -27,12 +27,12 @@
 
 #include <memory>
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
-#include "src/api-inl.h"
+#include "src/api/api-inl.h"
 #include "src/debug/debug.h"
-#include "src/objects-inl.h"
-#include "src/string-search.h"
+#include "src/objects/objects-inl.h"
+#include "src/strings/string-search.h"
 #include "test/cctest/cctest.h"
 
 
@@ -59,11 +59,11 @@ static void CheckFunctionName(v8::Local<v8::Script> script,
         Handle<SharedFunctionInfo>(SharedFunctionInfo::cast(*obj), isolate);
   } else {
     shared_function =
-        Handle<SharedFunctionInfo>(JSFunction::cast(*obj)->shared(), isolate);
+        Handle<SharedFunctionInfo>(JSFunction::cast(*obj).shared(), isolate);
   }
   Handle<i::Script> i_script(i::Script::cast(shared_function->script()),
                              isolate);
-  CHECK(i_script->source()->IsString());
+  CHECK(i_script->source().IsString());
   Handle<i::String> script_src(i::String::cast(i_script->source()), isolate);
 
   // Find the position of a given func source substring in the source.
@@ -71,7 +71,7 @@ static void CheckFunctionName(v8::Local<v8::Script> script,
   {
     i::DisallowHeapAllocation no_gc;
     Vector<const uint8_t> func_pos_str = i::OneByteVector(func_pos_src);
-    i::String::FlatContent script_content = script_src->GetFlatContent();
+    i::String::FlatContent script_content = script_src->GetFlatContent(no_gc);
     func_pos = SearchString(isolate, script_content.ToOneByteVector(),
                             func_pos_str, 0);
   }
@@ -84,7 +84,7 @@ static void CheckFunctionName(v8::Local<v8::Script> script,
 
   // Verify inferred function name.
   std::unique_ptr<char[]> inferred_name =
-      shared_func_info->inferred_name()->ToCString();
+      shared_func_info->inferred_name().ToCString();
   i::PrintF("expected: %s, found: %s\n", ref_inferred_name,
             inferred_name.get());
   CHECK_EQ(0, strcmp(ref_inferred_name, inferred_name.get()));
@@ -94,8 +94,7 @@ static void CheckFunctionName(v8::Local<v8::Script> script,
 static v8::Local<v8::Script> Compile(v8::Isolate* isolate, const char* src) {
   return v8::Script::Compile(
              isolate->GetCurrentContext(),
-             v8::String::NewFromUtf8(isolate, src, v8::NewStringType::kNormal)
-                 .ToLocalChecked())
+             v8::String::NewFromUtf8(isolate, src).ToLocalChecked())
       .ToLocalChecked();
 }
 
@@ -453,8 +452,8 @@ TEST(FactoryHashmapVariable) {
               "  return obj;\n"
               "}");
   // Can't infer function names statically.
-  CheckFunctionName(script, "return 1", "obj.(anonymous function)");
-  CheckFunctionName(script, "return 2", "obj.(anonymous function)");
+  CheckFunctionName(script, "return 1", "obj.<computed>");
+  CheckFunctionName(script, "return 2", "obj.<computed>");
 }
 
 
@@ -470,7 +469,7 @@ TEST(FactoryHashmapConditional) {
       "  return obj;\n"
       "}");
   // Can't infer the function name statically.
-  CheckFunctionName(script, "return 1", "obj.(anonymous function)");
+  CheckFunctionName(script, "return 1", "obj.<computed>");
 }
 
 

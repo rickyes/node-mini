@@ -6,60 +6,68 @@
 #define V8_HEAP_HEAP_WRITE_BARRIER_H_
 
 #include "include/v8-internal.h"
+#include "src/base/optional.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
 
+class ArrayBufferExtension;
 class Code;
+class DescriptorArray;
+class EphemeronHashTable;
 class FixedArray;
 class Heap;
-class HeapObject;
-class HeapObjectPtr;
-class MaybeObject;
-class MaybeObjectSlot;
-class Object;
-class ObjectSlot;
+class JSArrayBuffer;
+class Map;
+class MarkCompactCollector;
+class MarkingBarrier;
 class RelocInfo;
 
 // Note: In general it is preferred to use the macros defined in
 // object-macros.h.
 
-// Write barrier for FixedArray elements.
-#define FIXED_ARRAY_ELEMENTS_WRITE_BARRIER(heap, array, start, length) \
-  do {                                                                 \
-    GenerationalBarrierForElements(heap, array, start, length);        \
-    MarkingBarrierForElements(heap, array);                            \
-  } while (false)
-
 // Combined write barriers.
-void WriteBarrierForCode(Code* host, RelocInfo* rinfo, Object* value);
-void WriteBarrierForCode(Code* host);
+void WriteBarrierForCode(Code host, RelocInfo* rinfo, Object value);
+void WriteBarrierForCode(Code host, RelocInfo* rinfo, HeapObject value);
+void WriteBarrierForCode(Code host);
 
 // Generational write barrier.
-void GenerationalBarrier(HeapObject* object, ObjectSlot slot, Object* value);
-void GenerationalBarrier(HeapObject* object, MaybeObjectSlot slot,
+void GenerationalBarrier(HeapObject object, ObjectSlot slot, Object value);
+void GenerationalBarrier(HeapObject object, ObjectSlot slot, HeapObject value);
+void GenerationalBarrier(HeapObject object, MaybeObjectSlot slot,
                          MaybeObject value);
-// This takes a HeapObjectPtr* (as opposed to a plain HeapObjectPtr)
-// to keep the WRITE_BARRIER macro syntax-compatible to the HeapObject*
-// version above.
-// TODO(3770): This should probably take a HeapObjectPtr eventually.
-void GenerationalBarrier(HeapObjectPtr* object, ObjectSlot slot, Object* value);
-void GenerationalBarrierForElements(Heap* heap, FixedArray* array, int offset,
-                                    int length);
-void GenerationalBarrierForCode(Code* host, RelocInfo* rinfo,
-                                HeapObject* object);
+void GenerationalEphemeronKeyBarrier(EphemeronHashTable table, ObjectSlot slot,
+                                     Object value);
+void GenerationalBarrierForCode(Code host, RelocInfo* rinfo, HeapObject object);
 
-// Marking write barrier.
-void MarkingBarrier(HeapObject* object, ObjectSlot slot, Object* value);
-void MarkingBarrier(HeapObject* object, MaybeObjectSlot slot,
-                    MaybeObject value);
-// This takes a HeapObjectPtr* (as opposed to a plain HeapObjectPtr)
-// to keep the WRITE_BARRIER macro syntax-compatible to the HeapObject*
-// version above.
-// TODO(3770): This should probably take a HeapObjectPtr eventually.
-void MarkingBarrier(HeapObjectPtr* object, ObjectSlot slot, Object* value);
-void MarkingBarrierForElements(Heap* heap, HeapObject* object);
-void MarkingBarrierForCode(Code* host, RelocInfo* rinfo, HeapObject* object);
+inline bool IsReadOnlyHeapObject(HeapObject object);
+
+class V8_EXPORT_PRIVATE WriteBarrier {
+ public:
+  static inline void Marking(HeapObject host, ObjectSlot, Object value);
+  static inline void Marking(HeapObject host, HeapObjectSlot, HeapObject value);
+  static inline void Marking(HeapObject host, MaybeObjectSlot,
+                             MaybeObject value);
+  static inline void Marking(Code host, RelocInfo*, HeapObject value);
+  static inline void Marking(JSArrayBuffer host, ArrayBufferExtension*);
+  static inline void Marking(DescriptorArray, int number_of_own_descriptors);
+  // It is invoked from generated code and has to take raw addresses.
+  static int MarkingFromCode(Address raw_host, Address raw_slot);
+
+  static void SetForThread(MarkingBarrier*);
+  static void ClearForThread(MarkingBarrier*);
+
+ private:
+  static void MarkingSlow(Heap* heap, HeapObject host, HeapObjectSlot,
+                          HeapObject value);
+  static void MarkingSlow(Heap* heap, Code host, RelocInfo*, HeapObject value);
+  static void MarkingSlow(Heap* heap, JSArrayBuffer host,
+                          ArrayBufferExtension*);
+  static void MarkingSlow(Heap* heap, DescriptorArray,
+                          int number_of_own_descriptors);
+  static inline base::Optional<Heap*> GetHeapIfMarking(HeapObject object);
+};
 
 }  // namespace internal
 }  // namespace v8

@@ -13,6 +13,7 @@ const undetectable = %GetUndetectable();
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertFalse(foo());
   assertFalse(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -26,6 +27,7 @@ const undetectable = %GetUndetectable();
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo());
   assertTrue(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -39,6 +41,7 @@ const undetectable = %GetUndetectable();
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo());
   assertTrue(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -52,6 +55,7 @@ const undetectable = %GetUndetectable();
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo());
   assertTrue(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -65,6 +69,7 @@ const undetectable = %GetUndetectable();
 
   function foo() { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo());
   assertTrue(foo());
   %OptimizeFunctionOnNextCall(foo);
@@ -78,6 +83,7 @@ const undetectable = %GetUndetectable();
 
   function foo(a) { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo(b));
   assertFalse(foo(a));
   assertTrue(foo(b));
@@ -85,10 +91,6 @@ const undetectable = %GetUndetectable();
   %OptimizeFunctionOnNextCall(foo);
   assertTrue(foo(b));
   assertFalse(foo(a));
-
-  // TurboFan doesn't need to bake in feedback, since it sees the undetectable.
-  assertFalse(foo(1));
-  assertOptimized(foo);
 })();
 
 // Unknown undetectable on one side strict equality with receiver.
@@ -98,6 +100,7 @@ const undetectable = %GetUndetectable();
 
   function foo(a, b) { return a == b; }
 
+  %PrepareFunctionForOptimization(foo);
   assertTrue(foo(b, b));
   assertFalse(foo(a, b));
   assertTrue(foo(a, a));
@@ -111,6 +114,33 @@ const undetectable = %GetUndetectable();
   assertFalse(foo(b, a));
   assertTrue(foo(a, null));
   assertFalse(foo(b, null));
+  assertOptimized(foo);
+
+  // TurboFan bakes in feedback on the inputs.
+  assertFalse(foo(1));
+  assertUnoptimized(foo);
+})();
+
+// Unknown undetectable on both sides.
+(function() {
+  const a = undetectable;
+
+  function foo(a, b) { return a == b; }
+
+  %PrepareFunctionForOptimization(foo);
+  assertTrue(foo(a, a));
+  assertTrue(foo(a, undefined));
+  assertTrue(foo(undefined, a));
+  assertFalse(foo(a, %GetUndetectable()));
+  assertFalse(foo(%GetUndetectable(), a));
+  assertFalse(foo(%GetUndetectable(), %GetUndetectable()));
+  %OptimizeFunctionOnNextCall(foo);
+  assertTrue(foo(a, a));
+  assertTrue(foo(a, undefined));
+  assertTrue(foo(undefined, a));
+  assertFalse(foo(a, %GetUndetectable()));
+  assertFalse(foo(%GetUndetectable(), a));
+  assertFalse(foo(%GetUndetectable(), %GetUndetectable()));
   assertOptimized(foo);
 
   // TurboFan bakes in feedback on the inputs.

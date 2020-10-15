@@ -24,15 +24,15 @@ v8_executable("inspector-test") {
     "../..:v8",
     "../..:v8_libbase",
     "../..:v8_libplatform",
+    "../../src/inspector:inspector_test_headers",
     "//build/win:default_exe_manifest",
   ]
 
-  data_deps = [
-    "../../tools:v8_testrunner",
-  ]
+  data_deps = [ "../../tools:v8_testrunner" ]
 
   data = [
     "console/",
+    "counters/",
     "cpu-profiler/",
     "debugger/",
     "heap-profiler/",
@@ -41,10 +41,11 @@ v8_executable("inspector-test") {
     "json-parse.js",
     "protocol-test.js",
     "runtime/",
+    "runtime-call-stats/",
     "sessions/",
     "testcfg.py",
     "type-profiler/",
-    "../../src/inspector/injected-script-source.js",
+    "wasm-inspector-test.js",
   ]
 
   cflags = []

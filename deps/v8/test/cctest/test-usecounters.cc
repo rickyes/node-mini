@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
+#include "src/init/v8.h"
 
 #include "test/cctest/cctest.h"
 
@@ -60,108 +60,74 @@ TEST(AssigmentExpressionLHSIsCall) {
   use_counts[v8::Isolate::kAssigmentExpressionLHSIsCallInStrict] = 0;
 }
 
-TEST(AtomicsWakeAndAtomicsNotify) {
+TEST(RegExpMatchIsTrueishOnNonJSRegExp) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   LocalContext env;
   int use_counts[v8::Isolate::kUseCounterFeatureCount] = {};
   global_use_counts = use_counts;
-  i::FLAG_harmony_sharedarraybuffer = true;
   CcTest::isolate()->SetUseCounterCallback(MockUseCounterCallback);
 
-  CompileRun("Atomics.wake(new Int32Array(new SharedArrayBuffer(16)), 0);");
-  CHECK_EQ(1, use_counts[v8::Isolate::kAtomicsWake]);
-  CHECK_EQ(0, use_counts[v8::Isolate::kAtomicsNotify]);
+  CompileRun("new RegExp(/./); new RegExp('');");
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsTrueishOnNonJSRegExp]);
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsFalseishOnJSRegExp]);
 
-  use_counts[v8::Isolate::kAtomicsWake] = 0;
-  use_counts[v8::Isolate::kAtomicsNotify] = 0;
-
-  CompileRun("Atomics.notify(new Int32Array(new SharedArrayBuffer(16)), 0);");
-  CHECK_EQ(0, use_counts[v8::Isolate::kAtomicsWake]);
-  CHECK_EQ(1, use_counts[v8::Isolate::kAtomicsNotify]);
+  CompileRun("let p = { [Symbol.match]: true }; new RegExp(p);");
+  CHECK_EQ(1, use_counts[v8::Isolate::kRegExpMatchIsTrueishOnNonJSRegExp]);
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsFalseishOnJSRegExp]);
 }
 
-TEST(OverrideReadOnlyPropertyOnPrototype) {
+TEST(RegExpMatchIsFalseishOnJSRegExp) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   LocalContext env;
   int use_counts[v8::Isolate::kUseCounterFeatureCount] = {};
   global_use_counts = use_counts;
   CcTest::isolate()->SetUseCounterCallback(MockUseCounterCallback);
-  using Isolate = v8::Isolate;
 
-  // Initial setup
-  CompileRun(
-      "Object.defineProperty(Object.prototype, 'readonly', "
-      "{ readonly: true, value: 'readonly', configurable: false });");
-  CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-  CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
+  CompileRun("new RegExp(/./); new RegExp('');");
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsTrueishOnNonJSRegExp]);
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsFalseishOnJSRegExp]);
 
-  // StoreIC Sloppy
-  CompileRun(
-      "function sloppy() { let sloppy = {}; sloppy.readonly = 'override'; }"
-      "sloppy();");
-  CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-  CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy] = 0;
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict] = 0;
+  CompileRun("let p = /./; p[Symbol.match] = false; new RegExp(p);");
+  CHECK_EQ(0, use_counts[v8::Isolate::kRegExpMatchIsTrueishOnNonJSRegExp]);
+  CHECK_EQ(1, use_counts[v8::Isolate::kRegExpMatchIsFalseishOnJSRegExp]);
+}
 
-  // StoreIC Sloppy (one-shot)
-  CompileRun("let sloppyob = {}; sloppyob.readonly = 'override';");
-  CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-  CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy] = 0;
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict] = 0;
+TEST(ObjectPrototypeHasElements) {
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+  LocalContext env;
+  int use_counts[v8::Isolate::kUseCounterFeatureCount] = {};
+  global_use_counts = use_counts;
+  CcTest::isolate()->SetUseCounterCallback(MockUseCounterCallback);
 
-  // StoreIC Strict
-  {
-    v8::TryCatch try_catch(isolate);
-    CompileRun(
-        "function strict() {"
-        "    'use strict'; let strict = {}; strict.readonly = 'override';"
-        "}"
-        "strict();");
-    CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-    CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-    CHECK(try_catch.HasCaught());
-  }
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy] = 0;
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict] = 0;
+  CompileRun("var o = {}; o[1] = 2;");
+  CHECK_EQ(0, use_counts[v8::Isolate::kObjectPrototypeHasElements]);
 
-  // StoreIC Strict (one-shot)
-  {
-    v8::TryCatch try_catch(isolate);
-    CompileRun(
-        "'use strict';"
-        "let strictob = {}; strictob.readonly = 'override';");
-    CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-    CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-    CHECK(try_catch.HasCaught());
-  }
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy] = 0;
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict] = 0;
+  CompileRun("var o = {}; var p = {}; o.__proto__ = p; p[1] = 2;");
+  CHECK_EQ(0, use_counts[v8::Isolate::kObjectPrototypeHasElements]);
 
-  // KeyedStoreIC Sloppy
-  CompileRun(
-      "function sloppy2() { let sloppy = {}; sloppy['readonly'] = 'override'; }"
-      "sloppy2();");
-  CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-  CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy] = 0;
-  use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict] = 0;
+  CompileRun("Object.prototype[1] = 2;");
+  CHECK_EQ(1, use_counts[v8::Isolate::kObjectPrototypeHasElements]);
+}
 
-  // KeyedStoreIC Strict
-  {
-    v8::TryCatch try_catch(isolate);
-    CompileRun(
-        "function strict2() {"
-        "    'use strict'; let strict = {}; strict['readonly'] = 'override';"
-        "}"
-        "strict2();");
-    CHECK_EQ(0, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeSloppy]);
-    CHECK_EQ(1, use_counts[Isolate::kAttemptOverrideReadOnlyOnPrototypeStrict]);
-    CHECK(try_catch.HasCaught());
-  }
+TEST(ArrayPrototypeHasElements) {
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+  LocalContext env;
+  int use_counts[v8::Isolate::kUseCounterFeatureCount] = {};
+  global_use_counts = use_counts;
+  CcTest::isolate()->SetUseCounterCallback(MockUseCounterCallback);
+
+  CompileRun("var a = []; a[1] = 2;");
+  CHECK_EQ(0, use_counts[v8::Isolate::kArrayPrototypeHasElements]);
+
+  CompileRun("var a = []; var p = []; a.__proto__ = p; p[1] = 2;");
+  CHECK_EQ(0, use_counts[v8::Isolate::kArrayPrototypeHasElements]);
+
+  CompileRun("Array.prototype[1] = 2;");
+  CHECK_EQ(1, use_counts[v8::Isolate::kArrayPrototypeHasElements]);
 }
 
 }  // namespace test_usecounters

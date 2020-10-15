@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Flags: --random-seed=891196975 --expose-gc --allow-natives-syntax
+// Flags: --expose-gc --allow-natives-syntax
 // Flags: --gc-interval=207 --stress-compaction --validate-asm
 // Flags: --opt --no-always-opt
 //
@@ -264,7 +264,6 @@ var __v_11 = this;
 var __v_12 = {};
 var __v_13 = {};
 try {
-    load("test/mjsunit/wasm/wasm-constants.js");
     load("test/mjsunit/wasm/wasm-module-__v_1.js");
     __v_2 = 0x10000;
 } catch (e) {
@@ -274,19 +273,19 @@ try {
 function __f_16() {
     var __v_1 = new WasmModuleBuilder();
     __v_1.addFunction("grow_memory", kSig_i_i)
-        .addBody([kExprGetLocal, 0, kExprGrowMemory])
+        .addBody([kExprLocalGet, 0, kExprMemoryGrow])
         .exportFunc();
     __v_1.addFunction("load", kSig_i_i)
-        .addBody([kExprGetLocal, 0, kExprI32LoadMem, 0, 0])
+        .addBody([kExprLocalGet, 0, kExprI32LoadMem, 0, 0])
         .exportFunc();
     __v_1.addFunction("store", kSig_i_ii)
-        .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32StoreMem, 0, 0, kExprGetLocal, 1])
+        .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32StoreMem, 0, 0, kExprLocalGet, 1])
         .exportFunc();
     __v_1.addFunction("load16", kSig_i_i)
-        .addBody([kExprGetLocal, 0, kExprI32LoadMem16U, 0, 0])
+        .addBody([kExprLocalGet, 0, kExprI32LoadMem16U, 0, 0])
         .exportFunc();
     __v_1.addFunction("store16", kSig_i_ii)
-        .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32StoreMem16, 0, 0, kExprGetLocal, 1])
+        .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32StoreMem16, 0, 0, kExprLocalGet, 1])
         .exportFunc();
     __v_1.__p_1551105852 = __v_1[getRandomProperty(__v_1, 1551105852)];
     __v_1.__defineGetter__(getRandomProperty(__v_1, 348910887), function() {
@@ -295,10 +294,10 @@ function __f_16() {
         return __v_1.__p_1551105852;
     });
     __v_1.addFunction("load8", kSig_i_i)
-        .addBody([kExprGetLocal, 0, kExprI32LoadMem8U, 0, 0])
+        .addBody([kExprLocalGet, 0, kExprI32LoadMem8U, 0, 0])
         .exportFunc();
     __v_1.addFunction("store8", kSig_i_ii)
-        .addBody([kExprGetLocal, 0, kExprGetLocal, 1, kExprI32StoreMem8, 0, 0, kExprGetLocal, 1])
+        .addBody([kExprLocalGet, 0, kExprLocalGet, 1, kExprI32StoreMem8, 0, 0, kExprLocalGet, 1])
         .exportFunc();
     return __v_1;
 }
@@ -937,6 +936,7 @@ function __f_30(x) {
     return 0;
 }
 try {
+    %PrepareFunctionForOptimization(__f_30);
     assertEquals(0, __f_30(0));
     assertEquals(0, __f_30(0));
     %OptimizeFunctionOnNextCall(__f_30);
@@ -957,6 +957,7 @@ function __f_33() {
     __f_32({});
 }
 try {
+    %PrepareFunctionForOptimization(__f_33);
     __f_33();
     __f_33();
     __f_33();

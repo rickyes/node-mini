@@ -5,14 +5,10 @@
 #ifndef V8_BUILTINS_BUILTINS_COLLECTIONS_GEN_H_
 #define V8_BUILTINS_BUILTINS_COLLECTIONS_GEN_H_
 
-#include "src/code-stub-assembler.h"
+#include "src/codegen/code-stub-assembler.h"
 
 namespace v8 {
 namespace internal {
-
-using compiler::Node;
-template <class T>
-using TNode = compiler::TNode<T>;
 
 void BranchIfIterableWithOriginalKeyOrValueMapIterator(
     compiler::CodeAssemblerState* state, TNode<Object> iterable,

@@ -16,9 +16,11 @@ class TestConfig(object):
                no_harness,
                noi18n,
                random_seed,
+               run_skipped,
                shell_dir,
                timeout,
-               verbose):
+               verbose,
+               regenerate_expected_files=False):
     self.command_prefix = command_prefix
     self.extra_flags = extra_flags
     self.isolates = isolates
@@ -27,6 +29,8 @@ class TestConfig(object):
     self.noi18n = noi18n
     # random_seed is always not None.
     self.random_seed = random_seed or random_utils.random_seed()
+    self.run_skipped = run_skipped
     self.shell_dir = shell_dir
     self.timeout = timeout
     self.verbose = verbose
+    self.regenerate_expected_files = regenerate_expected_files

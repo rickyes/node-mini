@@ -9,8 +9,8 @@
 #include <string>
 
 #include "src/base/platform/elapsed-timer.h"
-#include "src/compilation-statistics.h"
 #include "src/compiler/zone-stats.h"
+#include "src/diagnostics/compilation-statistics.h"
 
 namespace v8 {
 namespace internal {
@@ -63,7 +63,6 @@ class PipelineStatistics : public Malloced {
 
   // Stats for the entire compilation.
   CommonStats total_stats_;
-  size_t source_size_;
 
   // Stats for phase kind.
   const char* phase_kind_name_;

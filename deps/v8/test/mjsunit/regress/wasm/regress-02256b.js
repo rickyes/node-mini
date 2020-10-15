@@ -2,9 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Flags: --random-seed=891196975 --expose-gc --allow-natives-syntax
-// Flags: --gc-interval=207 --stress-compaction --validate-asm
-// Flags: --opt --no-always-opt
+// Flags: --expose-gc --allow-natives-syntax --gc-interval=207
+// Flags: --stress-compaction --validate-asm --opt --no-always-opt
 //
 // /v8/test/mjsunit/wasm/grow-memory.js
 // /v8/test/mjsunit/regress/regress-540.js
@@ -472,6 +471,7 @@ function __f_30(x) {
     return 0;
 }
 try {
+    %PrepareFunctionForOptimization(__f_30);
     assertEquals(0, __f_30(0));
     assertEquals(0, __f_30(0));
     %OptimizeFunctionOnNextCall(__f_30);
@@ -492,6 +492,7 @@ function __f_33() {
     __f_32({});
 }
 try {
+    %PrepareFunctionForOptimization(__f_33);
     __f_33();
     __f_33();
     __f_33();

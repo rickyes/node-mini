@@ -5,41 +5,76 @@
 #ifndef V8_OBJECTS_SLOTS_H_
 #define V8_OBJECTS_SLOTS_H_
 
-#include "src/globals.h"
+#include "src/base/memory.h"
+#include "src/common/globals.h"
 
 namespace v8 {
 namespace internal {
 
-template <typename Subclass>
+class Object;
+
+template <typename Subclass, typename Data,
+          size_t SlotDataAlignment = sizeof(Data)>
 class SlotBase {
  public:
-  Subclass& operator++() {
-    ptr_ += kPointerSize;
+  using TData = Data;
+
+  static constexpr size_t kSlotDataSize = sizeof(Data);
+  static constexpr size_t kSlotDataAlignment = SlotDataAlignment;
+
+  Subclass& operator++() {  // Prefix increment.
+    ptr_ += kSlotDataSize;
     return *static_cast<Subclass*>(this);
+  }
+  Subclass operator++(int) {  // Postfix increment.
+    Subclass result = *static_cast<Subclass*>(this);
+    ptr_ += kSlotDataSize;
+    return result;
+  }
+  Subclass& operator--() {  // Prefix decrement.
+    ptr_ -= kSlotDataSize;
+    return *static_cast<Subclass*>(this);
+  }
+  Subclass operator--(int) {  // Postfix decrement.
+    Subclass result = *static_cast<Subclass*>(this);
+    ptr_ -= kSlotDataSize;
+    return result;
   }
 
   bool operator<(const SlotBase& other) const { return ptr_ < other.ptr_; }
   bool operator<=(const SlotBase& other) const { return ptr_ <= other.ptr_; }
+  bool operator>(const SlotBase& other) const { return ptr_ > other.ptr_; }
+  bool operator>=(const SlotBase& other) const { return ptr_ >= other.ptr_; }
   bool operator==(const SlotBase& other) const { return ptr_ == other.ptr_; }
   bool operator!=(const SlotBase& other) const { return ptr_ != other.ptr_; }
   size_t operator-(const SlotBase& other) const {
     DCHECK_GE(ptr_, other.ptr_);
-    return static_cast<size_t>((ptr_ - other.ptr_) / kPointerSize);
+    return static_cast<size_t>((ptr_ - other.ptr_) / kSlotDataSize);
   }
-  Subclass operator-(int i) const { return Subclass(ptr_ - i * kPointerSize); }
-  Subclass operator+(int i) const { return Subclass(ptr_ + i * kPointerSize); }
+  Subclass operator-(int i) const { return Subclass(ptr_ - i * kSlotDataSize); }
+  Subclass operator+(int i) const { return Subclass(ptr_ + i * kSlotDataSize); }
+  friend Subclass operator+(int i, const Subclass& slot) {
+    return Subclass(slot.ptr_ + i * kSlotDataSize);
+  }
   Subclass& operator+=(int i) {
-    ptr_ += i * kPointerSize;
+    ptr_ += i * kSlotDataSize;
+    return *static_cast<Subclass*>(this);
+  }
+  Subclass operator-(int i) { return Subclass(ptr_ - i * kSlotDataSize); }
+  Subclass& operator-=(int i) {
+    ptr_ -= i * kSlotDataSize;
     return *static_cast<Subclass*>(this);
   }
 
   void* ToVoidPtr() const { return reinterpret_cast<void*>(address()); }
 
   Address address() const { return ptr_; }
+  // For symmetry with Handle.
+  TData* location() const { return reinterpret_cast<TData*>(ptr_); }
 
  protected:
   explicit SlotBase(Address ptr) : ptr_(ptr) {
-    DCHECK(IsAligned(ptr, kPointerSize));
+    DCHECK(IsAligned(ptr, kSlotDataAlignment));
   }
 
  private:
@@ -49,71 +84,193 @@ class SlotBase {
   Address ptr_;
 };
 
-// An ObjectSlot instance describes a pointer-sized field ("slot") holding
-// a tagged pointer (smi or heap object).
+// An FullObjectSlot instance describes a kSystemPointerSize-sized field
+// ("slot") holding a tagged pointer (smi or strong heap object).
 // Its address() is the address of the slot.
 // The slot's contents can be read and written using operator* and store().
-class ObjectSlot : public SlotBase<ObjectSlot> {
+class FullObjectSlot : public SlotBase<FullObjectSlot, Address> {
  public:
-  ObjectSlot() : SlotBase(kNullAddress) {}
-  explicit ObjectSlot(Address ptr) : SlotBase(ptr) {}
-  explicit ObjectSlot(Object** ptr)
+  using TObject = Object;
+  using THeapObjectSlot = FullHeapObjectSlot;
+
+  // Tagged value stored in this slot is guaranteed to never be a weak pointer.
+  static constexpr bool kCanBeWeak = false;
+
+  FullObjectSlot() : SlotBase(kNullAddress) {}
+  explicit FullObjectSlot(Address ptr) : SlotBase(ptr) {}
+  explicit FullObjectSlot(const Address* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
+  inline explicit FullObjectSlot(Object* object);
   template <typename T>
-  explicit ObjectSlot(SlotBase<T> slot) : SlotBase(slot.address()) {}
+  explicit FullObjectSlot(SlotBase<T, TData, kSlotDataAlignment> slot)
+      : SlotBase(slot.address()) {}
 
-  Object* operator*() const { return *reinterpret_cast<Object**>(address()); }
-  void store(Object* value) { *reinterpret_cast<Object**>(address()) = value; }
+  // Compares memory representation of a value stored in the slot with given
+  // raw value.
+  inline bool contains_value(Address raw_value) const;
 
-  inline Object* Relaxed_Load() const;
-  inline Object* Relaxed_Load(int offset) const;
-  inline void Relaxed_Store(int offset, Object* value) const;
+  inline Object operator*() const;
+  inline Object load(IsolateRoot isolate) const;
+  inline void store(Object value) const;
+
+  inline Object Acquire_Load() const;
+  inline Object Acquire_Load(IsolateRoot isolate) const;
+  inline Object Relaxed_Load() const;
+  inline Object Relaxed_Load(IsolateRoot isolate) const;
+  inline void Relaxed_Store(Object value) const;
+  inline void Release_Store(Object value) const;
+  inline Object Relaxed_CompareAndSwap(Object old, Object target) const;
+  inline Object Release_CompareAndSwap(Object old, Object target) const;
 };
 
-// A MaybeObjectSlot instance describes a pointer-sized field ("slot") holding
-// a possibly-weak tagged pointer (think: MaybeObject).
+// A FullMaybeObjectSlot instance describes a kSystemPointerSize-sized field
+// ("slot") holding a possibly-weak tagged pointer (think: MaybeObject).
 // Its address() is the address of the slot.
 // The slot's contents can be read and written using operator* and store().
-class MaybeObjectSlot : public SlotBase<MaybeObjectSlot> {
+class FullMaybeObjectSlot
+    : public SlotBase<FullMaybeObjectSlot, Address, kSystemPointerSize> {
  public:
-  explicit MaybeObjectSlot(Address ptr) : SlotBase(ptr) {}
-  explicit MaybeObjectSlot(Object** ptr)
+  using TObject = MaybeObject;
+  using THeapObjectSlot = FullHeapObjectSlot;
+
+  // Tagged value stored in this slot can be a weak pointer.
+  static constexpr bool kCanBeWeak = true;
+
+  FullMaybeObjectSlot() : SlotBase(kNullAddress) {}
+  explicit FullMaybeObjectSlot(Address ptr) : SlotBase(ptr) {}
+  explicit FullMaybeObjectSlot(Object* ptr)
+      : SlotBase(reinterpret_cast<Address>(ptr)) {}
+  explicit FullMaybeObjectSlot(MaybeObject* ptr)
       : SlotBase(reinterpret_cast<Address>(ptr)) {}
   template <typename T>
-  explicit MaybeObjectSlot(SlotBase<T> slot) : SlotBase(slot.address()) {}
+  explicit FullMaybeObjectSlot(SlotBase<T, TData, kSlotDataAlignment> slot)
+      : SlotBase(slot.address()) {}
 
-  inline MaybeObject operator*();
-  inline void store(MaybeObject value);
+  inline MaybeObject operator*() const;
+  inline MaybeObject load(IsolateRoot isolate) const;
+  inline void store(MaybeObject value) const;
 
   inline MaybeObject Relaxed_Load() const;
+  inline MaybeObject Relaxed_Load(IsolateRoot isolate) const;
+  inline void Relaxed_Store(MaybeObject value) const;
   inline void Release_CompareAndSwap(MaybeObject old, MaybeObject target) const;
 };
 
-// A HeapObjectSlot instance describes a pointer-sized field ("slot") holding
-// a weak or strong pointer to a heap object (think: HeapObjectReference).
+// A FullHeapObjectSlot instance describes a kSystemPointerSize-sized field
+// ("slot") holding a weak or strong pointer to a heap object (think:
+// HeapObjectReference).
 // Its address() is the address of the slot.
 // The slot's contents can be read and written using operator* and store().
 // In case it is known that that slot contains a strong heap object pointer,
 // ToHeapObject() can be used to retrieve that heap object.
-class HeapObjectSlot : public SlotBase<HeapObjectSlot> {
+class FullHeapObjectSlot : public SlotBase<FullHeapObjectSlot, Address> {
  public:
-  HeapObjectSlot() : SlotBase(kNullAddress) {}
-  explicit HeapObjectSlot(Address ptr) : SlotBase(ptr) {}
+  FullHeapObjectSlot() : SlotBase(kNullAddress) {}
+  explicit FullHeapObjectSlot(Address ptr) : SlotBase(ptr) {}
+  explicit FullHeapObjectSlot(Object* ptr)
+      : SlotBase(reinterpret_cast<Address>(ptr)) {}
   template <typename T>
-  explicit HeapObjectSlot(SlotBase<T> slot) : SlotBase(slot.address()) {}
+  explicit FullHeapObjectSlot(SlotBase<T, TData, kSlotDataAlignment> slot)
+      : SlotBase(slot.address()) {}
 
-  inline HeapObjectReference operator*();
-  inline void store(HeapObjectReference value);
+  inline HeapObjectReference operator*() const;
+  inline HeapObjectReference load(IsolateRoot isolate) const;
+  inline void store(HeapObjectReference value) const;
 
-  HeapObject* ToHeapObject() {
-    DCHECK((*reinterpret_cast<Address*>(address()) & kHeapObjectTagMask) ==
-           kHeapObjectTag);
-    return *reinterpret_cast<HeapObject**>(address());
+  inline HeapObject ToHeapObject() const;
+
+  inline void StoreHeapObject(HeapObject value) const;
+};
+
+// TODO(ishell, v8:8875): When pointer compression is enabled the [u]intptr_t
+// and double fields are only kTaggedSize aligned so in order to avoid undefined
+// behavior in C++ code we use this iterator adaptor when using STL algorithms
+// with unaligned pointers.
+// It will be removed once all v8:8875 is fixed and all the full pointer and
+// double values in compressed V8 heap are properly aligned.
+template <typename T>
+class UnalignedSlot : public SlotBase<UnalignedSlot<T>, T, 1> {
+ public:
+  // This class is a stand-in for "T&" that uses custom read/write operations
+  // for the actual memory accesses.
+  class Reference {
+   public:
+    explicit Reference(Address address) : address_(address) {}
+    Reference(const Reference&) V8_NOEXCEPT = default;
+
+    Reference& operator=(const Reference& other) V8_NOEXCEPT {
+      base::WriteUnalignedValue<T>(address_, other.value());
+      return *this;
+    }
+    Reference& operator=(T value) {
+      base::WriteUnalignedValue<T>(address_, value);
+      return *this;
+    }
+
+    // Values of type UnalignedSlot::reference must be implicitly convertible
+    // to UnalignedSlot::value_type.
+    operator T() const { return value(); }
+
+    void swap(Reference& other) {
+      T tmp = value();
+      base::WriteUnalignedValue<T>(address_, other.value());
+      base::WriteUnalignedValue<T>(other.address_, tmp);
+    }
+
+    bool operator<(const Reference& other) const {
+      return value() < other.value();
+    }
+
+    bool operator==(const Reference& other) const {
+      return value() == other.value();
+    }
+
+   private:
+    T value() const { return base::ReadUnalignedValue<T>(address_); }
+
+    Address address_;
+  };
+
+  // The rest of this class follows C++'s "RandomAccessIterator" requirements.
+  // Most of the heavy lifting is inherited from SlotBase.
+  using difference_type = int;
+  using value_type = T;
+  using reference = Reference;
+  using pointer = T*;
+  using iterator_category = std::random_access_iterator_tag;
+
+  UnalignedSlot() : SlotBase<UnalignedSlot<T>, T, 1>(kNullAddress) {}
+  explicit UnalignedSlot(Address address)
+      : SlotBase<UnalignedSlot<T>, T, 1>(address) {}
+  explicit UnalignedSlot(T* address)
+      : SlotBase<UnalignedSlot<T>, T, 1>(reinterpret_cast<Address>(address)) {}
+
+  Reference operator*() const {
+    return Reference(SlotBase<UnalignedSlot<T>, T, 1>::address());
+  }
+  Reference operator[](difference_type i) const {
+    return Reference(SlotBase<UnalignedSlot<T>, T, 1>::address() +
+                     i * sizeof(T));
   }
 
-  void StoreHeapObject(HeapObject* value) {
-    *reinterpret_cast<HeapObject**>(address()) = value;
+  friend void swap(Reference lhs, Reference rhs) { lhs.swap(rhs); }
+
+  friend difference_type operator-(UnalignedSlot a, UnalignedSlot b) {
+    return static_cast<int>(a.address() - b.address()) / sizeof(T);
   }
+};
+
+// An off-heap uncompressed object slot can be the same as an on-heap one, with
+// a few methods deleted.
+class OffHeapFullObjectSlot : public FullObjectSlot {
+ public:
+  OffHeapFullObjectSlot() : FullObjectSlot() {}
+  explicit OffHeapFullObjectSlot(const Address* ptr) : FullObjectSlot(ptr) {}
+
+  inline Object operator*() const = delete;
+
+  using FullObjectSlot::Relaxed_Load;
+  inline Object Relaxed_Load() const = delete;
 };
 
 }  // namespace internal

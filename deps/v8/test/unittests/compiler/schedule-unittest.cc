@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/compiler/node.h"
 #include "src/compiler/schedule.h"
+
+#include "src/compiler/node.h"
 #include "test/unittests/test-utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -14,8 +15,7 @@ namespace internal {
 namespace compiler {
 namespace schedule_unittest {
 
-typedef TestWithIsolateAndZone BasicBlockTest;
-
+using BasicBlockTest = TestWithIsolateAndZone;
 
 TEST_F(BasicBlockTest, Constructor) {
   int const id = random_number_generator()->NextInt();
@@ -68,9 +68,10 @@ TEST_F(BasicBlockTest, GetCommonDominator3) {
   EXPECT_EQ(&b0, BasicBlock::GetCommonDominator(&b3, &b1));
 }
 
-
-typedef TestWithZone ScheduleTest;
-
+class ScheduleTest : public TestWithZone {
+ public:
+  ScheduleTest() : TestWithZone(kCompressGraphZone) {}
+};
 
 const Operator kCallOperator(IrOpcode::kCall, Operator::kNoProperties,
                              "MockCall", 0, 0, 0, 0, 0, 0);

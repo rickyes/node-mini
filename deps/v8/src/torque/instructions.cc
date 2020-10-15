@@ -21,29 +21,52 @@ namespace torque {
 TORQUE_INSTRUCTION_LIST(TORQUE_INSTRUCTION_BOILERPLATE_DEFINITIONS)
 #undef TORQUE_INSTRUCTION_BOILERPLATE_DEFINITIONS
 
+namespace {
+void ExpectType(const Type* expected, const Type* actual) {
+  if (expected != actual) {
+    ReportError("expected type ", *expected, " but found ", *actual);
+  }
+}
+void ExpectSubtype(const Type* subtype, const Type* supertype) {
+  if (!subtype->IsSubtypeOf(supertype)) {
+    ReportError("type ", *subtype, " is not a subtype of ", *supertype);
+  }
+}
+}  // namespace
+
 void PeekInstruction::TypeInstruction(Stack<const Type*>* stack,
                                       ControlFlowGraph* cfg) const {
   const Type* type = stack->Peek(slot);
   if (widened_type) {
-    if (!type->IsSubtypeOf(*widened_type)) {
-      ReportError("type ", type, " is not a subtype of ", *widened_type);
+    if (type->IsTopType()) {
+      const TopType* top_type = TopType::cast(type);
+      ReportError("use of " + top_type->reason());
     }
+    ExpectSubtype(type, *widened_type);
     type = *widened_type;
   }
   stack->Push(type);
+}
+
+void PeekInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Push(locations->Peek(slot));
 }
 
 void PokeInstruction::TypeInstruction(Stack<const Type*>* stack,
                                       ControlFlowGraph* cfg) const {
   const Type* type = stack->Top();
   if (widened_type) {
-    if (!type->IsSubtypeOf(*widened_type)) {
-      ReportError("type ", type, " is not a subtype of ", *widened_type);
-    }
+    ExpectSubtype(type, *widened_type);
     type = *widened_type;
   }
   stack->Poke(slot, type);
   stack->Pop();
+}
+
+void PokeInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Poke(slot, locations->Pop());
 }
 
 void DeleteRangeInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -51,19 +74,113 @@ void DeleteRangeInstruction::TypeInstruction(Stack<const Type*>* stack,
   stack->DeleteRange(range);
 }
 
+void DeleteRangeInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->DeleteRange(range);
+}
+
 void PushUninitializedInstruction::TypeInstruction(
     Stack<const Type*>* stack, ControlFlowGraph* cfg) const {
   stack->Push(type);
 }
 
-void PushCodePointerInstruction::TypeInstruction(Stack<const Type*>* stack,
-                                                 ControlFlowGraph* cfg) const {
+void PushUninitializedInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Push(GetValueDefinition());
+}
+
+DefinitionLocation PushUninitializedInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
+}
+
+void PushBuiltinPointerInstruction::TypeInstruction(
+    Stack<const Type*>* stack, ControlFlowGraph* cfg) const {
   stack->Push(type);
 }
 
-void ModuleConstantInstruction::TypeInstruction(Stack<const Type*>* stack,
-                                                ControlFlowGraph* cfg) const {
+void PushBuiltinPointerInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Push(GetValueDefinition());
+}
+
+DefinitionLocation PushBuiltinPointerInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
+}
+
+void NamespaceConstantInstruction::TypeInstruction(
+    Stack<const Type*>* stack, ControlFlowGraph* cfg) const {
   stack->PushMany(LowerType(constant->type()));
+}
+
+void NamespaceConstantInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+    locations->Push(GetValueDefinition(i));
+  }
+}
+
+std::size_t NamespaceConstantInstruction::GetValueDefinitionCount() const {
+  return LowerType(constant->type()).size();
+}
+
+DefinitionLocation NamespaceConstantInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
+}
+
+void InstructionBase::InvalidateTransientTypes(
+    Stack<const Type*>* stack) const {
+  auto current = stack->begin();
+  while (current != stack->end()) {
+    if ((*current)->IsTransient()) {
+      std::stringstream stream;
+      stream << "type " << **current
+             << " is made invalid by transitioning callable invocation at "
+             << PositionAsString(pos);
+      *current = TypeOracle::GetTopType(stream.str(), *current);
+    }
+    ++current;
+  }
+}
+
+void CallIntrinsicInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                               ControlFlowGraph* cfg) const {
+  std::vector<const Type*> parameter_types =
+      LowerParameterTypes(intrinsic->signature().parameter_types);
+  for (intptr_t i = parameter_types.size() - 1; i >= 0; --i) {
+    const Type* arg_type = stack->Pop();
+    const Type* parameter_type = parameter_types.back();
+    parameter_types.pop_back();
+    if (arg_type != parameter_type) {
+      ReportError("parameter ", i, ": expected type ", *parameter_type,
+                  " but found type ", *arg_type);
+    }
+  }
+  if (intrinsic->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+  stack->PushMany(LowerType(intrinsic->signature().return_type));
+}
+
+void CallIntrinsicInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  auto parameter_types =
+      LowerParameterTypes(intrinsic->signature().parameter_types);
+  locations->PopMany(parameter_types.size());
+  for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+    locations->Push(DefinitionLocation::Instruction(this, i));
+  }
+}
+
+std::size_t CallIntrinsicInstruction::GetValueDefinitionCount() const {
+  return LowerType(intrinsic->signature().return_type).size();
+}
+
+DefinitionLocation CallIntrinsicInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
 }
 
 void CallCsaMacroInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -79,9 +196,51 @@ void CallCsaMacroInstruction::TypeInstruction(Stack<const Type*>* stack,
                   " but found type ", *arg_type);
     }
   }
-  if (!parameter_types.empty()) ReportError("missing arguments");
+
+  if (macro->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetJSAnyType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
 
   stack->PushMany(LowerType(macro->signature().return_type));
+}
+
+void CallCsaMacroInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  auto parameter_types =
+      LowerParameterTypes(macro->signature().parameter_types);
+  locations->PopMany(parameter_types.size());
+
+  if (catch_block) {
+    locations->Push(*GetExceptionObjectDefinition());
+    (*catch_block)->MergeInputDefinitions(*locations, worklist);
+    locations->Pop();
+  }
+
+  for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+    locations->Push(GetValueDefinition(i));
+  }
+}
+
+base::Optional<DefinitionLocation>
+CallCsaMacroInstruction::GetExceptionObjectDefinition() const {
+  if (!catch_block) return base::nullopt;
+  return DefinitionLocation::Instruction(this, GetValueDefinitionCount());
+}
+
+std::size_t CallCsaMacroInstruction::GetValueDefinitionCount() const {
+  return LowerType(macro->signature().return_type).size();
+}
+
+DefinitionLocation CallCsaMacroInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
 }
 
 void CallCsaMacroAndBranchInstruction::TypeInstruction(
@@ -97,7 +256,6 @@ void CallCsaMacroAndBranchInstruction::TypeInstruction(
                   " but found type ", *arg_type);
     }
   }
-  if (!parameter_types.empty()) ReportError("missing arguments");
 
   if (label_blocks.size() != macro->signature().labels.size()) {
     ReportError("wrong number of labels");
@@ -107,6 +265,16 @@ void CallCsaMacroAndBranchInstruction::TypeInstruction(
     continuation_stack.PushMany(
         LowerParameterTypes(macro->signature().labels[i].types));
     label_blocks[i]->SetInputTypes(std::move(continuation_stack));
+  }
+
+  if (macro->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetJSAnyType());
+    (*catch_block)->SetInputTypes(catch_stack);
   }
 
   if (macro->signature().return_type != TypeOracle::GetNeverType()) {
@@ -123,6 +291,78 @@ void CallCsaMacroAndBranchInstruction::TypeInstruction(
   }
 }
 
+void CallCsaMacroAndBranchInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  auto parameter_types =
+      LowerParameterTypes(macro->signature().parameter_types);
+  locations->PopMany(parameter_types.size());
+
+  for (std::size_t label_index = 0; label_index < label_blocks.size();
+       ++label_index) {
+    const std::size_t count = GetLabelValueDefinitionCount(label_index);
+    for (std::size_t i = 0; i < count; ++i) {
+      locations->Push(GetLabelValueDefinition(label_index, i));
+    }
+    label_blocks[label_index]->MergeInputDefinitions(*locations, worklist);
+    locations->PopMany(count);
+  }
+
+  if (catch_block) {
+    locations->Push(*GetExceptionObjectDefinition());
+    (*catch_block)->MergeInputDefinitions(*locations, worklist);
+    locations->Pop();
+  }
+
+  if (macro->signature().return_type != TypeOracle::GetNeverType()) {
+    if (return_continuation) {
+      const std::size_t count = GetValueDefinitionCount();
+      for (std::size_t i = 0; i < count; ++i) {
+        locations->Push(GetValueDefinition(i));
+      }
+      (*return_continuation)->MergeInputDefinitions(*locations, worklist);
+      locations->PopMany(count);
+    }
+  }
+}
+
+std::size_t CallCsaMacroAndBranchInstruction::GetLabelCount() const {
+  return label_blocks.size();
+}
+
+std::size_t CallCsaMacroAndBranchInstruction::GetLabelValueDefinitionCount(
+    std::size_t label) const {
+  DCHECK_LT(label, GetLabelCount());
+  return LowerParameterTypes(macro->signature().labels[label].types).size();
+}
+
+DefinitionLocation CallCsaMacroAndBranchInstruction::GetLabelValueDefinition(
+    std::size_t label, std::size_t index) const {
+  DCHECK_LT(index, GetLabelValueDefinitionCount(label));
+  std::size_t offset = GetValueDefinitionCount() + (catch_block ? 1 : 0);
+  for (std::size_t label_index = 0; label_index < label; ++label_index) {
+    offset += GetLabelValueDefinitionCount(label_index);
+  }
+  return DefinitionLocation::Instruction(this, offset + index);
+}
+
+std::size_t CallCsaMacroAndBranchInstruction::GetValueDefinitionCount() const {
+  if (macro->signature().return_type == TypeOracle::GetNeverType()) return 0;
+  if (!return_continuation) return 0;
+  return LowerType(macro->signature().return_type).size();
+}
+
+DefinitionLocation CallCsaMacroAndBranchInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
+}
+
+base::Optional<DefinitionLocation>
+CallCsaMacroAndBranchInstruction::GetExceptionObjectDefinition() const {
+  if (!catch_block) return base::nullopt;
+  return DefinitionLocation::Instruction(this, GetValueDefinitionCount());
+}
+
 void CallBuiltinInstruction::TypeInstruction(Stack<const Type*>* stack,
                                              ControlFlowGraph* cfg) const {
   std::vector<const Type*> argument_types = stack->PopMany(argc);
@@ -130,18 +370,81 @@ void CallBuiltinInstruction::TypeInstruction(Stack<const Type*>* stack,
       LowerParameterTypes(builtin->signature().parameter_types)) {
     ReportError("wrong argument types");
   }
+  if (builtin->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetJSAnyType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
+
   stack->PushMany(LowerType(builtin->signature().return_type));
+}
+
+void CallBuiltinInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->PopMany(argc);
+
+  if (catch_block) {
+    locations->Push(*GetExceptionObjectDefinition());
+    (*catch_block)->MergeInputDefinitions(*locations, worklist);
+    locations->Pop();
+  }
+
+  for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+    locations->Push(GetValueDefinition(i));
+  }
+}
+
+std::size_t CallBuiltinInstruction::GetValueDefinitionCount() const {
+  return LowerType(builtin->signature().return_type).size();
+}
+
+DefinitionLocation CallBuiltinInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
+}
+
+base::Optional<DefinitionLocation>
+CallBuiltinInstruction::GetExceptionObjectDefinition() const {
+  if (!catch_block) return base::nullopt;
+  return DefinitionLocation::Instruction(this, GetValueDefinitionCount());
 }
 
 void CallBuiltinPointerInstruction::TypeInstruction(
     Stack<const Type*>* stack, ControlFlowGraph* cfg) const {
   std::vector<const Type*> argument_types = stack->PopMany(argc);
-  const FunctionPointerType* f = FunctionPointerType::DynamicCast(stack->Pop());
+  const BuiltinPointerType* f = BuiltinPointerType::DynamicCast(stack->Pop());
   if (!f) ReportError("expected function pointer type");
   if (argument_types != LowerParameterTypes(f->parameter_types())) {
     ReportError("wrong argument types");
   }
+  DCHECK_EQ(type, f);
+  // TODO(tebbi): Only invalidate transient types if the function pointer type
+  // is transitioning.
+  InvalidateTransientTypes(stack);
   stack->PushMany(LowerType(f->return_type()));
+}
+
+void CallBuiltinPointerInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->PopMany(argc + 1);
+  for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+    locations->Push(GetValueDefinition(i));
+  }
+}
+
+std::size_t CallBuiltinPointerInstruction::GetValueDefinitionCount() const {
+  return LowerType(type->return_type()).size();
+}
+
+DefinitionLocation CallBuiltinPointerInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
 }
 
 void CallRuntimeInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -152,10 +455,56 @@ void CallRuntimeInstruction::TypeInstruction(Stack<const Type*>* stack,
                           argc)) {
     ReportError("wrong argument types");
   }
+  if (runtime_function->IsTransitioning()) {
+    InvalidateTransientTypes(stack);
+  }
+
+  if (catch_block) {
+    Stack<const Type*> catch_stack = *stack;
+    catch_stack.Push(TypeOracle::GetJSAnyType());
+    (*catch_block)->SetInputTypes(catch_stack);
+  }
+
   const Type* return_type = runtime_function->signature().return_type;
   if (return_type != TypeOracle::GetNeverType()) {
     stack->PushMany(LowerType(return_type));
   }
+}
+
+void CallRuntimeInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->PopMany(argc);
+
+  if (catch_block) {
+    locations->Push(*GetExceptionObjectDefinition());
+    (*catch_block)->MergeInputDefinitions(*locations, worklist);
+    locations->Pop();
+  }
+
+  const Type* return_type = runtime_function->signature().return_type;
+  if (return_type != TypeOracle::GetNeverType()) {
+    for (std::size_t i = 0; i < GetValueDefinitionCount(); ++i) {
+      locations->Push(GetValueDefinition(i));
+    }
+  }
+}
+
+std::size_t CallRuntimeInstruction::GetValueDefinitionCount() const {
+  const Type* return_type = runtime_function->signature().return_type;
+  if (return_type == TypeOracle::GetNeverType()) return 0;
+  return LowerType(return_type).size();
+}
+
+DefinitionLocation CallRuntimeInstruction::GetValueDefinition(
+    std::size_t index) const {
+  DCHECK_LT(index, GetValueDefinitionCount());
+  return DefinitionLocation::Instruction(this, index);
+}
+
+base::Optional<DefinitionLocation>
+CallRuntimeInstruction::GetExceptionObjectDefinition() const {
+  if (!catch_block) return base::nullopt;
+  return DefinitionLocation::Instruction(this, GetValueDefinitionCount());
 }
 
 void BranchInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -168,15 +517,33 @@ void BranchInstruction::TypeInstruction(Stack<const Type*>* stack,
   if_false->SetInputTypes(*stack);
 }
 
+void BranchInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+  if_true->MergeInputDefinitions(*locations, worklist);
+  if_false->MergeInputDefinitions(*locations, worklist);
+}
+
 void ConstexprBranchInstruction::TypeInstruction(Stack<const Type*>* stack,
                                                  ControlFlowGraph* cfg) const {
   if_true->SetInputTypes(*stack);
   if_false->SetInputTypes(*stack);
 }
 
+void ConstexprBranchInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  if_true->MergeInputDefinitions(*locations, worklist);
+  if_false->MergeInputDefinitions(*locations, worklist);
+}
+
 void GotoInstruction::TypeInstruction(Stack<const Type*>* stack,
                                       ControlFlowGraph* cfg) const {
   destination->SetInputTypes(*stack);
+}
+
+void GotoInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  destination->MergeInputDefinitions(*locations, worklist);
 }
 
 void GotoExternalInstruction::TypeInstruction(Stack<const Type*>* stack,
@@ -186,20 +553,110 @@ void GotoExternalInstruction::TypeInstruction(Stack<const Type*>* stack,
   }
 }
 
+void GotoExternalInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {}
+
 void ReturnInstruction::TypeInstruction(Stack<const Type*>* stack,
                                         ControlFlowGraph* cfg) const {
   cfg->SetReturnType(stack->Pop());
 }
 
+void ReturnInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+}
+
 void PrintConstantStringInstruction::TypeInstruction(
     Stack<const Type*>* stack, ControlFlowGraph* cfg) const {}
 
-void DebugBreakInstruction::TypeInstruction(Stack<const Type*>* stack,
-                                            ControlFlowGraph* cfg) const {}
+void PrintConstantStringInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {}
+
+void AbortInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                       ControlFlowGraph* cfg) const {}
+
+void AbortInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {}
 
 void UnsafeCastInstruction::TypeInstruction(Stack<const Type*>* stack,
                                             ControlFlowGraph* cfg) const {
   stack->Poke(stack->AboveTop() - 1, destination_type);
+}
+
+void UnsafeCastInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Poke(locations->AboveTop() - 1, GetValueDefinition());
+}
+
+DefinitionLocation UnsafeCastInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
+}
+
+void LoadReferenceInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                               ControlFlowGraph* cfg) const {
+  ExpectType(TypeOracle::GetIntPtrType(), stack->Pop());
+  ExpectSubtype(stack->Pop(), TypeOracle::GetHeapObjectType());
+  DCHECK_EQ(std::vector<const Type*>{type}, LowerType(type));
+  stack->Push(type);
+}
+
+void LoadReferenceInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+  locations->Pop();
+  locations->Push(GetValueDefinition());
+}
+
+DefinitionLocation LoadReferenceInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
+}
+
+void StoreReferenceInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                                ControlFlowGraph* cfg) const {
+  ExpectSubtype(stack->Pop(), type);
+  ExpectType(TypeOracle::GetIntPtrType(), stack->Pop());
+  ExpectSubtype(stack->Pop(), TypeOracle::GetHeapObjectType());
+}
+
+void StoreReferenceInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+  locations->Pop();
+  locations->Pop();
+}
+
+void LoadBitFieldInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                              ControlFlowGraph* cfg) const {
+  ExpectType(bit_field_struct_type, stack->Pop());
+  stack->Push(bit_field.name_and_type.type);
+}
+
+void LoadBitFieldInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+  locations->Push(GetValueDefinition());
+}
+
+DefinitionLocation LoadBitFieldInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
+}
+
+void StoreBitFieldInstruction::TypeInstruction(Stack<const Type*>* stack,
+                                               ControlFlowGraph* cfg) const {
+  ExpectSubtype(bit_field.name_and_type.type, stack->Pop());
+  ExpectType(bit_field_struct_type, stack->Pop());
+  stack->Push(bit_field_struct_type);
+}
+
+void StoreBitFieldInstruction::RecomputeDefinitionLocations(
+    Stack<DefinitionLocation>* locations, Worklist<Block*>* worklist) const {
+  locations->Pop();
+  locations->Pop();
+  locations->Push(GetValueDefinition());
+}
+
+DefinitionLocation StoreBitFieldInstruction::GetValueDefinition() const {
+  return DefinitionLocation::Instruction(this, 0);
 }
 
 bool CallRuntimeInstruction::IsBlockTerminator() const {

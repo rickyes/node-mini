@@ -25,16 +25,24 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "include/v8.h"
 #include "test/cctest/cctest.h"
 
 #include "include/libplatform/libplatform.h"
+#include "include/v8.h"
+#include "src/codegen/compiler.h"
+#include "src/codegen/optimized-compilation-info.h"
+#include "src/compiler/pipeline.h"
 #include "src/debug/debug.h"
-#include "src/objects-inl.h"
+#include "src/flags/flags.h"
+#include "src/objects/objects-inl.h"
 #include "src/trap-handler/trap-handler.h"
 #include "test/cctest/print-extension.h"
 #include "test/cctest/profiler-extension.h"
 #include "test/cctest/trace-extension.h"
+
+#ifdef V8_USE_PERFETTO
+#include "src/tracing/trace-event.h"
+#endif  // V8_USE_PERFETTO
 
 #if V8_OS_WIN
 #include <windows.h>  // NOLINT
@@ -118,9 +126,23 @@ void CcTest::Run() {
 }
 
 i::Heap* CcTest::heap() { return i_isolate()->heap(); }
+i::ReadOnlyHeap* CcTest::read_only_heap() {
+  return i_isolate()->read_only_heap();
+}
 
-void CcTest::CollectGarbage(i::AllocationSpace space) {
-  heap()->CollectGarbage(space, i::GarbageCollectionReason::kTesting);
+void CcTest::AddGlobalFunction(v8::Local<v8::Context> env, const char* name,
+                               v8::FunctionCallback callback) {
+  v8::Local<v8::FunctionTemplate> func_template =
+      v8::FunctionTemplate::New(isolate_, callback);
+  v8::Local<v8::Function> func =
+      func_template->GetFunction(env).ToLocalChecked();
+  func->SetName(v8_str(name));
+  env->Global()->Set(env, v8_str(name), func).FromJust();
+}
+
+void CcTest::CollectGarbage(i::AllocationSpace space, i::Isolate* isolate) {
+  i::Isolate* iso = isolate ? isolate : i_isolate();
+  iso->heap()->CollectGarbage(space, i::GarbageCollectionReason::kTesting);
 }
 
 void CcTest::CollectAllGarbage(i::Isolate* isolate) {
@@ -138,6 +160,18 @@ void CcTest::PreciseCollectAllGarbage(i::Isolate* isolate) {
   i::Isolate* iso = isolate ? isolate : i_isolate();
   iso->heap()->PreciseCollectAllGarbage(i::Heap::kNoGCFlags,
                                         i::GarbageCollectionReason::kTesting);
+}
+
+i::Handle<i::String> CcTest::MakeString(const char* str) {
+  i::Isolate* isolate = CcTest::i_isolate();
+  i::Factory* factory = isolate->factory();
+  return factory->InternalizeUtf8String(str);
+}
+
+i::Handle<i::String> CcTest::MakeName(const char* str, int suffix) {
+  i::EmbeddedVector<char, 128> buffer;
+  SNPrintF(buffer, "%s%d", str, suffix);
+  return CcTest::MakeString(buffer.begin());
 }
 
 v8::base::RandomNumberGenerator* CcTest::random_number_generator() {
@@ -160,20 +194,20 @@ void CcTest::TearDown() {
   if (isolate_ != nullptr) isolate_->Dispose();
 }
 
-v8::Local<v8::Context> CcTest::NewContext(CcTestExtensionFlags extensions,
+v8::Local<v8::Context> CcTest::NewContext(CcTestExtensionFlags extension_flags,
                                           v8::Isolate* isolate) {
-    const char* extension_names[kMaxExtensions];
-    int extension_count = 0;
-  #define CHECK_EXTENSION_FLAG(Name, Id) \
-    if (extensions.Contains(Name##_ID)) extension_names[extension_count++] = Id;
-    EXTENSION_LIST(CHECK_EXTENSION_FLAG)
-  #undef CHECK_EXTENSION_FLAG
-    v8::ExtensionConfiguration config(extension_count, extension_names);
-    v8::Local<v8::Context> context = v8::Context::New(isolate, &config);
-    CHECK(!context.IsEmpty());
-    return context;
+  const char* extension_names[kMaxExtensions];
+  int extension_count = 0;
+  for (int i = 0; i < kMaxExtensions; ++i) {
+    if (!extension_flags.contains(static_cast<CcTestExtensionId>(i))) continue;
+    extension_names[extension_count] = kExtensionName[i];
+    ++extension_count;
+  }
+  v8::ExtensionConfiguration config(extension_count, extension_names);
+  v8::Local<v8::Context> context = v8::Context::New(isolate, &config);
+  CHECK(!context.IsEmpty());
+  return context;
 }
-
 
 void CcTest::DisableAutomaticDispose() {
   CHECK_EQ(kUninitialized, initialization_state_);
@@ -217,10 +251,41 @@ InitializedHandleScope::InitializedHandleScope()
 
 InitializedHandleScope::~InitializedHandleScope() = default;
 
-HandleAndZoneScope::HandleAndZoneScope()
-    : main_zone_(new i::Zone(&allocator_, ZONE_NAME)) {}
+HandleAndZoneScope::HandleAndZoneScope(bool support_zone_compression)
+    : main_zone_(
+          new i::Zone(&allocator_, ZONE_NAME, support_zone_compression)) {}
 
 HandleAndZoneScope::~HandleAndZoneScope() = default;
+
+i::Handle<i::JSFunction> Optimize(
+    i::Handle<i::JSFunction> function, i::Zone* zone, i::Isolate* isolate,
+    uint32_t flags, std::unique_ptr<i::compiler::JSHeapBroker>* out_broker) {
+  i::Handle<i::SharedFunctionInfo> shared(function->shared(), isolate);
+  i::IsCompiledScope is_compiled_scope(shared->is_compiled_scope(isolate));
+  CHECK(is_compiled_scope.is_compiled() ||
+        i::Compiler::Compile(function, i::Compiler::CLEAR_EXCEPTION,
+                             &is_compiled_scope));
+
+  CHECK_NOT_NULL(zone);
+
+  i::OptimizedCompilationInfo info(zone, isolate, shared, function,
+                                   i::CodeKind::TURBOFAN);
+
+  if (flags & i::OptimizedCompilationInfo::kInlining) {
+    info.set_inlining();
+  }
+
+  CHECK(info.shared_info()->HasBytecodeArray());
+  i::JSFunction::EnsureFeedbackVector(function, &is_compiled_scope);
+
+  i::Handle<i::Code> code =
+      i::compiler::Pipeline::GenerateCodeForTesting(&info, isolate, out_broker)
+          .ToHandleChecked();
+  info.native_context().AddOptimizedCode(*code);
+  function->set_code(*code);
+
+  return function;
+}
 
 static void PrintTestList(CcTest* current) {
   if (current == nullptr) return;
@@ -234,7 +299,6 @@ static void SuggestTestHarness(int tests) {
   printf("Running multiple tests in sequence is deprecated and may cause "
          "bogus failure.  Consider using tools/run-tests.py instead.\n");
 }
-
 
 int main(int argc, char* argv[]) {
 #if V8_OS_WIN
@@ -253,24 +317,25 @@ int main(int argc, char* argv[]) {
 #endif  // V8_CC_MSVC
 #endif  // V8_OS_WIN
 
-  // hack to print cctest specific flags
-  for (int i = 1; i < argc; i++) {
-    char* arg = argv[i];
-    if ((strcmp(arg, "--help") == 0) || (strcmp(arg, "-h") == 0)) {
-      printf("Usage: %s [--list] [[V8_FLAGS] CCTEST]\n", argv[0]);
-      printf("\n");
-      printf("Options:\n");
-      printf("  --list:   list all cctests\n");
-      printf("  CCTEST:   cctest identfier returned by --list\n");
-      printf("  D8_FLAGS: see d8 output below\n");
-      printf("\n\n");
-    }
-  }
+  std::string usage = "Usage: " + std::string(argv[0]) + " [--list]" +
+                      " [[V8_FLAGS] CCTEST]\n\n" + "Options:\n" +
+                      "  --list:   list all cctests\n" +
+                      "  CCTEST:   cctest identfier returned by --list\n" +
+                      "  V8_FLAGS: see V8 options below\n\n\n";
+
+#ifdef V8_USE_PERFETTO
+  // Set up the in-process backend that the tracing controller will connect to.
+  perfetto::TracingInitArgs init_args;
+  init_args.backends = perfetto::BackendType::kInProcessBackend;
+  perfetto::Tracing::Initialize(init_args);
+#endif  // V8_USE_PERFETTO
 
   v8::V8::InitializeICUDefaultLocation(argv[0]);
   std::unique_ptr<v8::Platform> platform(v8::platform::NewDefaultPlatform());
   v8::V8::InitializePlatform(platform.get());
-  v8::internal::FlagList::SetFlagsFromCommandLine(&argc, argv, true);
+  using HelpOptions = v8::internal::FlagList::HelpOptions;
+  v8::internal::FlagList::SetFlagsFromCommandLine(
+      &argc, argv, true, HelpOptions(HelpOptions::kExit, usage.c_str()));
   v8::V8::Initialize();
   v8::V8::InitializeExternalStartupData(argv[0]);
 
@@ -282,12 +347,9 @@ int main(int argc, char* argv[]) {
   CcTest::set_array_buffer_allocator(
       v8::ArrayBuffer::Allocator::NewDefaultAllocator());
 
-  i::PrintExtension print_extension;
-  v8::RegisterExtension(&print_extension);
-  i::ProfilerExtension profiler_extension;
-  v8::RegisterExtension(&profiler_extension);
-  i::TraceExtension trace_extension;
-  v8::RegisterExtension(&trace_extension);
+  v8::RegisterExtension(std::make_unique<i::PrintExtension>());
+  v8::RegisterExtension(std::make_unique<i::ProfilerExtension>());
+  v8::RegisterExtension(std::make_unique<i::TraceExtension>());
 
   int tests_run = 0;
   bool print_run_count = true;
@@ -337,8 +399,7 @@ int main(int argc, char* argv[]) {
   if (print_run_count && tests_run != 1)
     printf("Ran %i tests.\n", tests_run);
   CcTest::TearDown();
-  // TODO(svenpanne) See comment above.
-  // if (!disable_automatic_dispose_) v8::V8::Dispose();
+  if (!disable_automatic_dispose_) v8::V8::Dispose();
   v8::V8::ShutdownPlatform();
   return 0;
 }
