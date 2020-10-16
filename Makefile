@@ -7,7 +7,7 @@ INCLUDE    = ./deps/v8/include
 V8_RELEASE = deps/v8/out.gn/x64.release.sample/obj/
 
 BUILDTYPE ?= Release
-BUILDTYPE_LOWER := $(shell echo $(BUILDTYPE) | tr '[A-Z]' '[a-z]')
+BUILDTYPE_LOWER := $(shell echo $(BUILDTYPE) | tr '[A-Z]' '[a-z]').sample
 UNAME_M=$(shell uname -m)
 
 ifeq ($(findstring x86_64,$(UNAME_M)),x86_64)
