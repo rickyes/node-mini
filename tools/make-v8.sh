@@ -8,6 +8,10 @@ cd deps/v8
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git _depot_tools
 export PATH=$PATH:./_depot_tools
 
+cd _depot_tools && gclient
+
+echo $PWD
+
 gclient sync
 
 tools/dev/v8gen.py x64.release.sample 
