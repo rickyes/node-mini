@@ -9,7 +9,9 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git _depo
 
 TOOL_PATH=$PWD/_depot_tools
 
-cd _depot_tools && $TOOL_PATH/gclient && cd ..
+cd _depot_tools && $TOOL_PATH/gclient
+
+cd ..
 
 $TOOL_PATH/gclient sync
 
