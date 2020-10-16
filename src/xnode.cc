@@ -1,5 +1,5 @@
-#include "include/libplatform/libplatform.h"
-#include "include/v8.h"
+#include "libplatform/libplatform.h"
+#include "v8.h"
 #include <iostream>
 #include <string>
 #include <fstream> 
@@ -132,8 +132,7 @@ void parseException(Isolate* isolate, TryCatch* try_catch) {
 void compile(Local<String> source, Isolate* isolate, Local<v8::Context> context) {
     TryCatch try_catch(isolate);
     Local<Script> script;
-    v8::ScriptOrigin origin(String::NewFromUtf8(isolate, "(xnode)"));
-    if (!Script::Compile(context, source, &origin).ToLocal(&script)) {
+    if (!Script::Compile(context, source).ToLocal(&script)) {
       parseException(isolate, &try_catch);
       return;
     }
@@ -318,8 +317,8 @@ int main(int argc, char *argv[]) {
         HandleScope handle_scope(isolate);
 
         Handle<ObjectTemplate> global = ObjectTemplate::New(isolate);
-        global->Set(String::NewFromUtf8(isolate, "print"), FunctionTemplate::New(isolate, xnode::process::print));
-        global->Set(String::NewFromUtf8(isolate, "print_error"), FunctionTemplate::New(isolate,xnode::process::print_error));
+        global->Set(String::NewFromUtf8(isolate, "print").ToLocalChecked(), FunctionTemplate::New(isolate, xnode::process::print));
+        global->Set(String::NewFromUtf8(isolate, "print_error").ToLocalChecked(), FunctionTemplate::New(isolate, xnode::process::print_error));
         Local<Context> context = Context::New(isolate, NULL, global);
         Context::Scope context_scope(context);
 
@@ -339,13 +338,13 @@ int main(int argc, char *argv[]) {
         }
 
         MaybeLocal<Function> loaders_bootstrapper = 
-            xnode::GetBootstrapper(isolate, context, loaders_source, String::NewFromUtf8(isolate, loaders_name));
+            xnode::GetBootstrapper(isolate, context, loaders_source, String::NewFromUtf8(isolate, loaders_name).ToLocalChecked());
         if (loaders_bootstrapper.IsEmpty()) {
             // Execution was interrupted.
             return 0;
         }
 
-        Local<Function> get_binding_fn = Function::New(isolate, xnode::GetBinding);
+        Local<Function> get_binding_fn = Function::New(isolate->GetCurrentContext(), xnode::GetBinding).ToLocalChecked();
         Local<Value> loaders_bootstrapper_args[] = {
             Object::New(isolate),
             get_binding_fn

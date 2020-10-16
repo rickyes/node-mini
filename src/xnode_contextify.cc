@@ -27,7 +27,7 @@ void ContextScript::New(const FunctionCallbackInfo<Value>& args) {
 
 static void sayModule(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Isolate* isolate = args.GetIsolate();
-    args.GetReturnValue().Set(String::NewFromUtf8(isolate, "this is sayModule"));
+    args.GetReturnValue().Set(String::NewFromUtf8(isolate, "this is sayModule").ToLocalChecked());
 }
 
 void Initialize(Local<Object> target,
@@ -37,7 +37,11 @@ void Initialize(Local<Object> target,
 
     Isolate* isolate = context->GetIsolate();
 
-    target->Set(String::NewFromUtf8(isolate, "sayModule"), FunctionTemplate::New(isolate, sayModule)->GetFunction());
+    target->Set(
+        context,
+        String::NewFromUtf8(isolate, "sayModule").ToLocalChecked(),
+        FunctionTemplate::New(isolate, sayModule)->GetFunction(context).ToLocalChecked()
+    ).Check();
 }
 }
 }

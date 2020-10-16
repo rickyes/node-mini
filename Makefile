@@ -1,5 +1,5 @@
 CC         = g++
-STD        = c++0x
+STD        = c++14
 NODE       = ./xnode
 SOURCE     = ./src/*.cc
 INCLUDE    = ./deps/v8/include
@@ -88,7 +88,7 @@ ifdef DISABLE_V8_I18N
 endif
 
 build:
-	@g++ -Ideps/v8/ -I$(INCLUDE) $(SOURCE) -o $(NODE) -lv8_monolith -L$(V8_RELEASE) -pthread -std=$(STD)
+	@g++ -Ideps/v8 -I$(INCLUDE) $(SOURCE) -o $(NODE) -lv8_monolith -L$(V8_RELEASE) -pthread -std=$(STD) -DV8_COMPRESS_POINTERS
 
 v8:
 	tools/make-v8.sh $(V8_ARCH).$(BUILDTYPE_LOWER) $(V8_BUILD_OPTIONS)
