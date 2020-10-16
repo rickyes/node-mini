@@ -7,7 +7,7 @@ cd deps/v8
 
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git _depot_tools
 
-PATH=~/_depot_tools:$PATH cd _depot_tools && gclient
+cd _depot_tools && PATH=~/_depot_tools:$PATH gclient
 
 echo "PWD: "$PWD
 
