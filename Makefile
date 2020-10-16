@@ -87,7 +87,7 @@ ifdef DISABLE_V8_I18N
 	V8_BUILD_OPTIONS += i18nsupport=off
 endif
 
-build:
+build: v8
 	@g++ -Ideps/v8 -I$(INCLUDE) $(SOURCE) -o $(NODE) -lv8_monolith -L$(V8_RELEASE) -pthread -std=$(STD) -DV8_COMPRESS_POINTERS
 
 v8:
