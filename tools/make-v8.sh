@@ -5,13 +5,17 @@ V8_BUILD_OPTIONS=$2
 
 cd deps/v8
 
+if [ ! -d _depot_tools ];then
 git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git _depot_tools
+fi
 
 TOOL_PATH=$PWD/_depot_tools
 
 cd _depot_tools && $TOOL_PATH/gclient
 
 cd ..
+
+$TOOL_PATH/gclient config https://chromium.googlesource.com/v8/v8
 
 $TOOL_PATH/gclient sync
 
