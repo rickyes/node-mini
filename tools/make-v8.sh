@@ -5,6 +5,9 @@ V8_BUILD_OPTIONS=$2
 
 cd deps/v8
 
+find . -type d -name .git | xargs rm -rf
+tools/node/fetch_deps.py .
+
 tools/dev/v8gen.py x64.release.sample 
 # PATH=~/_depot_tools:$PATH gn gen -v out.gn/$BUILD_ARCH_TYPE --args="is_component_build=false is_debug=false use_goma=false goma_dir=\"None\" use_custom_libcxx=false v8_target_cpu=\"$TARGET_ARCH\" target_cpu=\"$TARGET_ARCH\" v8_enable_backtrace=true"
 PATH=~/_depot_tools:$PATH ninja -C out.gn/$BUILD_ARCH_TYPE v8_monolith
