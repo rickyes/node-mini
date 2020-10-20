@@ -13,7 +13,7 @@ TOOL_PATH=$PWD/_depot_tools
 
 cd _depot_tools && $TOOL_PATH/gclient
 
-cd ..
+cd ../..
 
 $TOOL_PATH/gclient config https://chromium.googlesource.com/v8/v8
 
